@@ -30,7 +30,7 @@ jobs:
 
       - name: Ajanlari 30 Dakika Calistir ve Web Sayfasini Uret
         env:
-          GEMINI_API_KEY: ${{ secrets.AQ.Ab8RN6KJRZ-GZ7vrL57WFIOq7QKSDn30XSY2-s5EYsL_ECanjQ }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python freelance_hunters.py
 
       - name: Veritabani ve Web Sayfasini (index.html) Yayinla
