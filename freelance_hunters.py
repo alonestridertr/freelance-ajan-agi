@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import html
 import time
 import sqlite3
@@ -33,7 +32,7 @@ su_an_tr = datetime.now(TR_SAAT_DILIMI)
 SEANS_ADI = "Sabah Seansı" if su_an_tr.hour < 15 else "Akşam Seansı"
 
 # ==============================================================================
-# 2. YAPI LANDIRILMIŞ RAPOR ŞEMASI (HTML KARTLAR İÇİN HATASIZ VERİ)
+# 2. YAPILANDIRILMIŞ RAPOR ŞEMASI (HTML KARTLAR İÇİN)
 # ==============================================================================
 class FreelanceIlanKarti(BaseModel):
     baslik: str = Field(description="İlanın tam başlığı")
@@ -151,12 +150,9 @@ class TekrarOnleyiciDB:
 # ==============================================================================
 def html_rapor_olustur(tarih_str: str, seans: str, rapor_verisi: GunlukRaporSemasi) -> str:
     kartlar_html = ""
-    
-    # Puanı en yüksek ilandan en düşüğe sırala
     sirali_ilanlar = sorted(rapor_verisi.ilanlar, key=lambda x: x.uygunluk_puani, reverse=True)
     
     for idx, ilan in enumerate(sirali_ilanlar, 1):
-        # Uygunluk puanına göre rozet rengi
         if ilan.uygunluk_puani >= 8:
             rozet_bg = "#dcfce7"
             rozet_renk = "#166534"
@@ -226,8 +222,6 @@ def html_rapor_olustur(tarih_str: str, seans: str, rapor_verisi: GunlukRaporSema
     </head>
     <body style="margin:0; padding:0; background-color:#f1f5f9; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
         <div style="max-width:680px; margin:24px auto; padding:0 16px;">
-            
-            <!-- Üst Başlık (Header) -->
             <div style="background:linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color:#ffffff; padding:28px 24px; border-radius:14px; margin-bottom:20px;">
                 <div style="font-size:12px; color:#93c5fd; font-weight:700; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">
                     Otonom CAD/CAM & Kalıp Mühendisliği İlan Ağı
@@ -240,7 +234,6 @@ def html_rapor_olustur(tarih_str: str, seans: str, rapor_verisi: GunlukRaporSema
                 </div>
             </div>
 
-            <!-- Yönetici Özeti -->
             <div style="background-color:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:18px 22px; margin-bottom:22px;">
                 <div style="font-size:13px; font-weight:700; color:#0f172a; margin-bottom:6px;">📌 Seans Özeti</div>
                 <p style="margin:0; font-size:14px; color:#475569; line-height:1.5;">
@@ -248,10 +241,8 @@ def html_rapor_olustur(tarih_str: str, seans: str, rapor_verisi: GunlukRaporSema
                 </p>
             </div>
 
-            <!-- İlan Kartları -->
             {kartlar_html}
 
-            <!-- Alt Bilgi (Footer) -->
             <div style="text-align:center; padding:16px; font-size:12px; color:#94a3b8;">
                 Bu rapor Google AI Studio (Gemini 2.5 Flash) otonom ajan ağı tarafından oluşturulmuştur.<br>
                 Daha önce raporlanan ilanlar SQLite veritabanı ile otomatik filtrelenmiştir.
@@ -277,7 +268,23 @@ def eposta_gonder_html(konu: str, html_icerik: str, duz_metin_yedek: str):
         server.login(GMAIL_GONDEREN, GMAIL_UYGULAMA_SIFRESI.replace(" ", ""))
         server.send_message(msg)
         server.quit()
-        print
+        print(f"[{datetime.now(TR_SAAT_DILIMI).strftime('%H:%M:%S')}] HTML Rapor e-posta olarak başarıyla gönderildi!")
+    except Exception as e:
+        print(f"E-posta gönderim hatası: {e}")
 
-if __name__ == "__main__":
-    ana_calistirici()
+# ==============================================================================
+# 6. UZMANLIK PROFİLİ VE AJANLAR
+# ==============================================================================
+UZMANLIK_PROFILI = """
+- Ana Uzmanlık: Sac Metal Kalıp Tasarımı (Progresif, Transfer, Kesme/Bükme Kalıpları)
+- Yazılımlar: SolidWorks, Logopress, Mastercam (CNC Freze/Torna CAM), Blender
+- Ek Yetkinlikler: Tersine Mühendislik (3D Tarama datası katılaştırma), Özel Makine/Aparat Tasarımı, 3D Baskı Prototipleme
+- Hedef Pazar: Küresel (Upwork, LinkedIn, Freelancer, Fiverr, GrabCAD) ve Yerel (Bionluk, proje bazlı ilanlar)
+"""
+
+ARAMA_KATEGORI_LISTESI = [
+    'site:upwork.com/freelance-jobs ("SolidWorks" OR "Sheet Metal" OR "Die Design")',
+    'site:linkedin.com/jobs ("SolidWorks" OR "Sheet Metal" OR "Tool and Die") ("contract" OR "freelance" OR "remote")',
+    'site:linkedin.com/posts ("looking for" OR "hiring") ("SolidWorks" OR "sheet metal" OR "Mastercam") freelance',
+    'site:freelancer.com/projects ("CNC" OR "Mastercam" OR "SolidWorks" OR "Sheet Metal")',
+    '"freelance" ("sheet metal die design" OR "progressive die
