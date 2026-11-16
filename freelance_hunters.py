@@ -1,128 +1,156 @@
-import base64
+import os, re, html, time, sqlite3, hashlib, smtplib
+from typing import List
+from pydantic import BaseModel
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timezone, timedelta
+from google import genai
+from google.genai import types
+from crewai import Agent, Task, Crew, Process, LLM
+from crewai.tools import tool
 
-KOD = (
-    "aW1wb3J0IG9zLCByZSwgaHRtbCwgdGltZSwgc3FsaXRlMywgaGFzaGxpYiwgc210cGxpYgpmcm9t"
-    "IHR5cGluZyBpbXBvcnQgTGlzdApmcm9tIHB5ZGFudGljIGltcG9ydCBCYXNlTW9kZWwsIEZpZWxk"
-    "CmZyb20gZW1haWwubWltZS50ZXh0IGltcG9ydCBNSU1FVGV4dApmcm9tIGVtYWlsLm1pbWUubXVs"
-    "dGlwYXJ0IGltcG9ydCBNSU1FTXVsdGlwYXJ0CmZyb20gZGF0ZXRpbWUgaW1wb3J0IGRhdGV0aW1l"
-    "LCB0aW1lem9uZSwgdGltZWRlbHRhCmZyb20gZ29vZ2xlIGltcG9ydCBnZW5haQpmcm9tIGdvb2ds"
-    "ZS5nZW5haSBpbXBvcnQgdHlwZXMKZnJvbSBjcmV3YWkgaW1wb3J0IEFnZW50LCBUYXNrLCBDcmV3"
-    "LCBQcm9jZXNzLCBMTE0KZnJvbSBjcmV3YWkudG9vbHMgaW1wb3J0IHRvb2wKCkdFTUlOSV9BUElf"
-    "S0VZID0gb3MuZW52aXJvbi5nZXQoIkdFTUlOSV9BUElfS0VZIikKR01BSUxfR09OREVSRU4gPSBv"
-    "cy5lbnZpcm9uLmdldCgiR01BSUxfR09OREVSRU4iKQpHTUFJTF9VWUdVTEFNQV9TSUZSRVNJID0g"
-    "b3MuZW52aXJvbi5nZXQoIkdNQUlMX1VZR1VMQU1BX1NJRlJFU0kiKQpSQVBPUl9BTElDSV9FTUFJ"
-    "TCA9IG9zLmVudmlyb24uZ2V0KCJSQVBPUl9BTElDSV9FTUFJTCIpClRBUkFNQV9TVVJFU0lfU0FO"
-    "SVlFID0gMTgwMAoKaWYgbm90IGFsbChbR0VNSU5JX0FQSV9LRVksIEdNQUlMX0dPTkRFUkVOLCBH"
-    "TUFJTF9VWUdVTEFNQV9TSUZSRVNJLCBSQVBPUl9BTElDSV9FTUFJTF0pOgogICAgcmFpc2UgVmFs"
-    "dWVFcnJvcigiSEFUQTogR2l0SHViIFNlY3JldHMgZWtzaWshIikKClRSX1NBQVQgPSB0aW1lem9u"
-    "ZSh0aW1lZGVsdGEoaG91cnM9MykpCnN1X2FuID0gZGF0ZXRpbWUubm93KFRSX1NBQVQpClNFQU5T"
-    "X0FESSAgPSAiU2FiYWggU2VhbnNpIiBpZiBzdV9hbi5ob3VyIDwgMTUgZWxzZSAiQWtzYW0gU2Vh"
-    "bnNpIgoKY2xhc3MgRnJlZWxhbmNlSWxhbkthcnRpKEJhc2VNb2RlbCk6CiAgICBiYXNsaWs6IHN0"
-    "cgogICAgcGxhdGZvcm06IHN0cgogICAgdXJsOiBzdHIKICAgIHV5Z3VubHVrX3B1YW5pOiBpbnQK"
-    "ICAgIHRhaG1pbmlfYnV0Y2Vfc3VyZTogc3RyCiAgICBuZWRlbl91eWd1bjogc3RyCiAgICB0ZWts"
-    "aWZfbWV0bmk6IHN0cgoKY2xhc3MgR3VubHVrUmFwb3JTZW1hc2EoQmFzZU1vZGVsKToKICAgIGdl"
-    "bmVsX296ZXQ6IHN0cgogICAgaWxhbmxhcjogTGlzdFtGcmVlbGFuY2VJbGFuS2FydGldCgpnZW5h"
-    "aV9jbGllbnQgPSBnZW5haS5DbGllbnQoYXBpX2tleT1HRU1JTklfQVBJX0tFWSkKCkB0b29sKCJD"
-    "YW5saSBHb29nbGUgSXMgSWxhbmkgQXJhbWEiKQpkZWYgY2FubGlfZ29vZ2xlX2FyYW1hKGFyYW1h"
-    "X3Nvcmd1c3U6IHN0cikgLT4gc3RyOgogICAgIiIiR29vZ2xlIFNlYXJjaCBpbGUgZ3VuY2VsIGZy"
-    "ZWVsYW5jZSBpbGFubGFyaW5pIGJ1bHVyLiIiIgogICAgcHJvbXB0ID0gZiJBc2FnaWRha2kgc29y"
-    "Z3UgaWxlIFVwd29yaywgTGlua2VkSW4sIEZyZWVsYW5jZXIsIEJpb25sdWsgdmIuIHBsYXRmb3Jt"
-    "bGFyZGFraSBlbiBndW5jZWwgZnJlZWxhbmNlIGlsYW5sYXJpbmkgYmFzbGlrLCBidXRjZSB2ZSBk"
-    "b2dydWRhbiBVUkwgbGlua2kgb2xhcmFrIGxpc3RlbGU6IHthcmFtYV9zb3JndXN1fSIKICAgIHRy"
-    "eToKICAgICAgICByZXNwID0gZ2VuYWlfY2xpZW50Lm1vZGVscy5nZW5lcmF0ZV9jb250ZW50KAog"
-    "ICAgICAgICAgICBtb2RlbD0iZ2VtaW5pLTIuNS1mbGFzaCIsCiAgICAgICAgICAgIGNvbnRlbnRz"
-    "PXByb21wdCwKICAgICAgICAgICAgY29uZmlnPXR5cGVzLkdlbmVyYXRlQ29uZGVudENvbmZpZyh0"
-    "b29scz1beyJnb29nbGVfc2VhcmNoIjoge319XSwgdGVtcGVyYXR1cmU9MC4xKQogICAgICAgICkK"
-    "ICAgICAgICBsaW5rbGVyID0gW10KICAgICAgICBpZiByZXNwLmNhbmRpZGF0ZXMgYW5kIHJlc3Au"
-    "Y2FuZGlkYXRlc1swXS5ncm91bmRpbmdfbWV0YWRhdGE6CiAgICAgICAgICAgIGZvciBjIGluIChy"
-    "ZXNwLmNhbmRpZGF0ZXNbMF0uZ3JvdW5kaW5nX21ldGFkYXRhLmdyb3VuZGluZ19jaHVua3Mgb3Ig"
-    "W10pOgogICAgICAgICAgICAgICAgaWYgYy53ZWIgYW5kIGMud2ViLnVyaToKICAgICAgICAgICAg"
-    "ICAgICAgICBsaW5rbGVyLmFwcGVuZChmIi0ge2Mud2ViLnRpdGxlfToge2Mud2ViLnVyaX0iKQog"
-    "ICAgICAgIHJldHVybiBmIntyZXNwLnRleHR9XG5cblVSTExFUjpcbnEnLmpvaW4obGlua2xlcil9"
-    "IgogICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgIHJldHVybiBmIkhhdGE6IHtlfSIK"
-    "CmNsYXNzIFRla3Jhck9ubGV5aWNpREI6CiAgICBkZWYgX19pbml0X18oc2VsZiwgZGI9InNlZW5f"
-    "am9icy5kYiIpOgogICAgICAgIHNlbGYuY29ubiA9IHNxbGl0ZTMuY29ubmVjdChkYikKICAgICAg"
-    "ICBzZWxmLmMgPSBzZWxmLmNvbm4uY3Vyc29yKCkKICAgICAgICBzZWxmLmMuZXhlY3V0ZSgiQ1JF"
-    "QVRFIFRBQkxFIElGIE5PVCBFWElTVFMgYnVsdW5hbl9pbGFubGFyIChpbGFuX2hhc2ggVEVYVCBQ"
-    "UklNQVJZIEtFWSwgdXJsIFRFWFQsIHRhcmloIFRFWFQpIikKICAgICAgICBzZWxmLmNvbm4uY29t"
-    "bWl0KCkKICAgIGRlZiBfeWVuZV9taShzZWxmLCB1KToKICAgICAgICBoID0gaGFzaGxpYi5zaGEy"
-    "NTYodS5zdHJpcCgpLmxvd2VyKCkuZW5jb2RlKCkpLmhlZGlnaWVzdCgpCiAgICAgICAgc2VsZi5j"
-    "LmV4ZWN1dGUoIlNFTEVDVCAxIEZST00gYnVsdW5hbl9pbGFubGFyIFdIRVJFIGlsYW5faGFzaD0/"
-    "IiwgKGgsKSkKICAgICAgICBpZiBzZWxmLmMuZmV0Y2hvbmUoKSBpcyBOb25lOgogICAgICAgICAg"
-    "ICBzZWxmLmMuZXhlY3V0ZSgiSU5TRVJUIElOVE8gYnVsdW5hbl9pbGFubGFyIFZBTFVFUyAoPyw/"
-    "LD8pIiwgKGgsIHUsIHN0cihkYXRldGltZS5ub3coVFJfU0FBVCkpKSkpCiAgICAgICAgICAgIHNl"
-    "bGYuY29ubi5jb21taXQoKQogICAgICAgICAgICByZXR1cm4gVHJ1ZQogICAgICAgIHJldHVybiBG"
-    "YWxzZQogICAgZGVmIGZpbHRyZWxlKHNlbGYsIG0pOgogICAgICAgIHVybHMgPSByZS5maW5kYWxs"
-    "KHInaHR0cHM/Oi8vW15cc1wpXF1cPiJdKicsIG0pCiAgICAgICAgeWVuaSA9IFt1LnNwbGl0KCc/"
-    "JylbMF0ucnN0cmlwKCcvJykgZm9yIHUgaW4gdXJscyBpZiBzZWxmLl95ZW5lX21pKHUuc3BsaXQo"
-    "Jz8nKVswXS5yc3RyaXAoJy8nKSldCiAgICAgICAgcmV0dXJuICJcbiIuam9pbih5ZW5pKSArICJc"
-    "blxuIiArIG0gaWYgeWVuaSBlbHNlICIiCgpkZWYgZXBvc3RhX2dvbmRlcihrb251LCBodG1sX2lj"
-    "ZXJpaywgZHV6X21ldGluKToKICAgIG1zZyA9IE1JTUVNdWx0aXBhcnQoImFsdGVybmF0aXZlIikK"
-    "ICAgIG1zZ1siRnJvbSJdLCBtc2dbIlRvIl0sIG1zZ1siU3ViamVjdCJdID0gR01BSUxfR09OREVS"
-    "RU4sIFJBUE9SX0FMSUNJX0VNQUlMLCBrb251CiAgICBtc2cuYXR0YWNoKE1JTUVUZXh0KGR1el9t"
-    "ZXRpbiwgInBsYWluIiwgInV0Zi04IikpCiAgICBtc2cuYXR0YWNoKE1JTUVUZXh0KGh0bWxfaWNl"
-    "cmlrLCAiaHRtbCIsICJ1dGYtOCIpKQogICAgcyA9IHNtdHBsaWIuU01UUCgic210cC5nbWFpbC5j"
-    "b20iLCA1ODcpCiAgICBzLnN0YXJ0dGxzKCkKICAgIHMubG9naW4oR01BSUxfR09OREVSRU4sIEdN"
-    "QUlMX1VZR1VMQU1BX1NJRlJFU0kucmVwbGFjZSgiICIsICIiKSkKICAgIHMuc2VuZF9tZXNzYWdl"
-    "KG1zZykKICAgIHMucXVpdCgpCgpkZWYgaHRtbF95YXAoZGF0YSwgdGFyaWgpOgogICAga2FydGxh"
-    "ciA9ICIiCiAgICBmb3IgaSwgeCBpbiBlbnVtZXJhdGUoc29ydGVkKGRhdGEuaWxhbmxhciwga2V5"
-    "PWxhbWJkYSBhOiBhLnV5Z3VubHVrX3B1YW5pLCByZXZlcnNlPVRydWUpLCAxKToKICAgICAgICBr"
-    "YXJ0bGFyICs9IGYnPGRpdiBzdHlsZT0iYmFja2dyb3VuZDojZmZmO2JvcmRlcjoxcHggc29saWQg"
-    "I2UyZThmMDtib3JkZXItcmFkaXVzOjEycHg7cGFkZGluZzoyMHB4O21hcmdpbi1ib3R0b206MTZw"
-    "eDsiPjxiPnt4LnBsYXRmb3JtfSB8IFB1YW46IHt4LnV5Z3VubHVrX3B1YW5pfS8xMDwvYj48aDM+"
-    "e2l9LiB7aHRtbC5lc2NhcGUoeC5iYXNsaWspOX08L2gzPjxwPjxiPkJ1dGNlL1N1cmU6PC9iPiB7"
-    "aHRtbC5lc2NhcGUoeC50YWhtaW5pX2J1dGNlX3N1cmUpfTwvcD48cD57aHRtbC5lc2NhcGUoeC5u"
-    "ZWRlbl91eWd1bil9PC9wPjxwcmUgc3R5bGU9ImJhY2tncm91bmQ6I2YxZjVmOTtwYWRkaW5nOjEy"
-    "cHg7d2hpdGUtc3BhY2U6cHJlLXdyYXA7Ij57aHRtbC5lc2NhcGUoeC50ZWtsaWZfbWV0bmkpfTwv"
-    "cHJlPjxhIGhyZWY9IntodG1sLmVzY2FwZSh4LnVybCl9IiBzdHlsZT0iYmFja2dyb3VuZDojMjU2"
-    "M2ViO2NvbG9yOiNmZmY7cGFkZGluZzo4cHggMTZweDtib3JkZXItcmFkaXVzOjZweDt0ZXh0LWRl"
-    "Y29yYXRpb246bm9uZTsiPklsYW5hIEdpdCAmIEJhc3Z1cjwvYT48L2Rpdj4nCiAgICByZXR1cm4g"
-    "Zic8ZGl2IHN0eWxlPSJtYXgtd2lkdGg6NjgwcHg7bWFyZ2luOmF1dG87Zm9udC1mYW1pbHk6c2Fu"
-    "cy1zZXJpZjsiPjxoMj5GcmVlbGFuY2UgUmFwb3J1ICh7dGFyaWh9IC0ge1NFQU5TX0FESX0pPC9o"
-    "Mj48cD57aHRtbC5lc2NhcGUoZGF0YS5nZW5lbF9vemV0KX08L3A+e2thcnRsYXJ9PC9kaXY+JwoK"
-    "U09SR1VMQVIgPSBbCiAgICAnInVwd29yayIgIlNvbGlkV29ya3MiIE9SICJTaGVldCBNZXRhbCIg"
-    "T1IgIkRpZSBEZXNpZ24iJywKICAgICciTGlua2VkSW4iICgiU29saWRXb3JrcyIgT1IgIlNoZWV0"
-    "IE1ldGFsIikgZnJlZWxhbmNlJywKICAgICciZnJlZWxhbmNlciIgKCJDTkMiIE9SICJNYXN0ZXJj"
-    "YW0iIE9SICJTb2xpZFdvcmtzIiknLAogICAgJyJmcmVlbGFuY2UiICgic2hlZXQgbWV0YWwgZGll"
-    "IGRlc2lnbiIgT1IgInByb2dyZXNzaXZlIGRpZSIpJywKICAgICciZnJlZWxhbmNlIiAoIk1hc3Rl"
-    "cmNhbSIgT1IgIkNOQyBwcm9ncmFtbWluZyIpJywKICAgICciYmlvbmx1ayIgKCJTb2xpZFdvcmtz"
-    "IiBPUiAiM0QgY2l6aW0iIE9SICJrYWxpcCB0YXNhcmltIiknLAogICAgJygidGVyc2luZSBtdWhl"
-    "bmRpc2xpayIgT1IgInNhYyBrYWxpcCB0YXNhcmltaSIpIGZyZWVsYW5jZScKXQoKZGVmIGFuYV9j"
-    "YWxpc3RpcmljaSgpOgogICAgbGxtID0gTExNKG1vZGVsPSJnZW1pbmkvZ2VtaW5pLTIuNS1mbGFz"
-    "aCIsIGFwaV9rZXk9R0VNSU5JX0FQSV9LRVkpCiAgICBkYiA9IFRla3Jhck9ubGV5aWNpREIoKQog"
-    "ICAgYXZjaSA9IEFnZW50KHJvbGU9IklsYW4gQXJhc3Rpcm1hY2lzaSIsIGdvYWw9Ikd1bmNlbCBD"
-    "QUQvQ0FNIGlsYW5sYXJpbmkgYnVsbWFrIiwgYmFja3N0b3J5PSJGcmVlbGFuY2UgdGVrbmlrIGls"
-    "YW4gYXZjaXNpIiwgdG9vbHM9W2NhbmxpX2dvb2dsZV9hcmFtYV0sIGxsbT1sbG0sIHZlcmJvc2U9"
-    "VHJ1ZSkKICAgIGZpbHRyZSA9IEFnZW50KHJvbGU9IkthbGlwIE11aGVuZGlzaSIsIGdvYWw9IlNh"
-    "YyBrYWxpcCwgU29saWRXb3JrcywgTG9nb3ByZXNzIHZlIE1hc3RlcmNhbSBpc2xlcmluaSBzZWNt"
-    "ZWsiLCBiYWNrc3Rvcnk9IjIwIHlsbGlrIGthbGlwIHZlIENOQyBtdWhlbmRpc2kiLCBsbG09bGxt"
-    "LCB2ZXJib3NlPVRydWUpCiAgICByYXBvciA9IEFnZW50KHJvbGU9IlRla2xpZiBTdHJhdGVqaXN0"
-    "aSIsIGdvYWw9IlNlaWxlbiBpbGFubGFyIGljaW4gdGVrbGlmIHZlcmlzaSBoYXppcmxhbWFrIiwg"
-    "YmFja3N0b3J5PSJGcmVlbGFuY2UgdGVrbGlmIHV6bWFuaSIsIGxsbT1sbG0sIHZlcmJvc2U9VHJ1"
-    "ZSkKICAgIGJhcyA9IHRpbWUudGltZSgpCiAgICB2ZXJpbGVyID0gW10KICAgIHdoaWxlICh0aW1l"
-    "LnRpbWUoKSAtIGJhcykgPCBUQVJBTUFfU1VSRVNJX1NBTklZRToKICAgICAgICBmb3IgcyBpbiBT"
-    "T1JHVUxBUjoKICAgICAgICAgICAgaWYgKHRpbWUudGltZSgpIC0gYmFzKSA+PSBUQVJBTUFfU1VS"
-    "RVNJX1NBTklZRTogYnJlYWsKICAgICAgICAgICAgdCA9IFRhc2soZGVzY3JpcHRpb249ZiJBcmEg"
-    "dmUgbGlua2xlcmkgbGlzdGVsZToge3N9IiwgZXhwZWN0ZWRfb3V0cHV0PSJJbGFuIGxpc3Rlc2ki"
-    "LCBhZ2VudD1hdmNpKQogICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICByID0gZGJ7LmZp"
-    "bHRyZWxlKHN0cihDcmV3KGFnZW50cz1bYXZjaV0sIHRhc2tzPVt0XSkua2lja29mZigpKSkKICAg"
-    "ICAgICAgICAgICAgIGlmIHI6IHZlcmlsZXIuYXBwZW5kKHIpCiAgICAgICAgICAgIGV4Y2VwdCBF"
-    "eGNlcHRpb24gYXMgZToKICAgICAgICAgICAgICAgIHByaW50KGUpCiAgICAgICAgICAgIHRpbWUu"
-    "c2xlZXAoNzUpCiAgICB0YXJpaCA9IGRhdGV0aW1lLm5vdyhUUl9TQUFUKSkuc3RyZnRpbWUoIiVk"
-    "LiVtLiVZIl0pCiAgICBpZiBub3QgdmVyaWxlcjoKICAgICAgICBlcG9zdGFfZ29uZGVyKGYiRnJl"
-    "ZWxhbmNlIEFqYW4gKHt0YXJpaH0pIC0gWWVuaSBJbGFuIFlvayIsICI8cD5ZZW5pIGlsYW4gYnVs"
-    "dW5hbWFkaS48L3A+IiwgIlllbmkgZWxhbiB5b2suIikKICAgICAgICByZXR1cm4KICAgIHRhID0g"
-    "VGFzayhkZXNjcmlwdGlvbj1mIlV5Z3VuIGlsYW5sYXJpIHNlYzpcblxuaCIgKyAiXG4iLmpvaW4o"
-    "dmVyaWxlcilaOjIwMDAwXSwgZXhwZWN0ZWRfb3V0cHV0PSJVeWd1biBpbGFubGFyIiwgYWdlbnQ9"
-    "ZmlsdHJlKQogICAgdHIgPSBUYXNrKGRlc2NyaXB0aW9uPSJHdW5sdWtSYXBvclNlbWFzYSBmb3Jt"
-    "YXRpbmRhIHJhcG9yIHZlcmlzaSBvbHVzdHVyLiIsIGV4cGVjdGVkX291dHB1dD0iSlNPTiIsIG91"
-    "dHB1dF9weWRhbnRpYz1HdW5sdWtSYXBvclNlbWFzYSwgYWdlbnQ9cmFwb3IpCiAgICByZXMgPSBD"
-    "cmV3KGFnZW50cz1bZmlsdHJlLCByYXBvcl0sIHRhc2tzPVt0YSwgdHJdKS5raWNrb2ZmKCkKICAg"
-    "IGlmIHJlcy5weWRhbnRpYyBhbmQgcmVzLnB5ZGFudGljLmlsYW5sYXI6CiAgICAgICAgZXBvc3Rh"
-    "X2dvbmRlcihmInt0YXJpaH0gRnJlZWxhbmNlIEZpcnNhdGxhcmkiLCBodG1sX3lhcChyZXMucHlk"
-    "YW50aWMsIHRhcmloKSwgc3RyKHJlcy5weWRhbnRpYykpCiAgICBlbHNlOgogICAgICAgIGVwb3N0"
-    "YV9nb25kZXIoZiJ7dGFyaWh9IEZyZWVsYW5jZSBSYXBvcnUiLCAiPHByZT4iICsgaHRtbC5lc2Nh"
-    "cGUoc3RyKHJlcykpICsgIjwvcHJlPiIsIHN0cihyZXMpKQoKaWYgX19uYW1lX18gPT0gIl9fbWFp"
-    "bl9fIjoKICAgIGFuYV9jYWxpc3RpcmljaSgpCg=="
-)
-exec(base64.b64decode(KOD).decode("utf-8"))
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GMAIL_GONDEREN = os.environ.get("GMAIL_GONDEREN")
+GMAIL_UYGULAMA_SIFRESI = os.environ.get("GMAIL_UYGULAMA_SIFRESI")
+RAPOR_ALICI_EMAIL = os.environ.get("RAPOR_ALICI_EMAIL")
+TARAMA_SURESI = 1800
+
+if not all([GEMINI_API_KEY, GMAIL_GONDEREN, GMAIL_UYGULAMA_SIFRESI, RAPOR_ALICI_EMAIL]):
+    raise ValueError("HATA: GitHub Secrets degiskenlerinden biri eksik!")
+
+TR_SAAT = timezone(timedelta(hours=3))
+SEANS = "Sabah Seansi" if datetime.now(TR_SAAT).hour < 15 else "Aksam Seansi"
+
+class IlanKarti(BaseModel):
+    baslik: str
+    platform: str
+    url: str
+    uygunluk_puani: int
+    tahmini_butce_sure: str
+    neden_uygun: str
+    teklif_metni: str
+
+class RaporSemasi(BaseModel):
+    genel_ozet: str
+    ilanlar: List[IlanKarti]
+
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+@tool("Canli Google Is Ilani Arama")
+def google_ilan_ara(sorgu: str) -> str:
+    """Google Search ile guncel freelance is ilanlarini ve URL linklerini bulur."""
+    prompt = f"Su sorguyla Upwork, LinkedIn, Freelancer, Bionluk vb. sitelerdeki en guncel freelance ilanlarini baslik, butce ve tam URL linkiyle listele: {sorgu}"
+    try:
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(tools=[{"google_search": {}}], temperature=0.1)
+        )
+        linkler = []
+        if resp.candidates and resp.candidates[0].grounding_metadata:
+            for c in (resp.candidates[0].grounding_metadata.grounding_chunks or []):
+                if c.web and c.web.uri:
+                    linkler.append(f"- {c.web.title}: {c.web.uri}")
+        return f"{resp.text}\n\nKAYNAKLAR:\n" + "\n".join(linkler)
+    except Exception as e:
+        return f"Arama hatasi: {e}"
+
+class IlanDB:
+    def __init__(self, db="seen_jobs.db"):
+        self.conn = sqlite3.connect(db)
+        self.c = self.conn.cursor()
+        self.c.execute("CREATE TABLE IF NOT EXISTS ilanlar (h TEXT PRIMARY KEY, url TEXT, tarih TEXT)")
+        self.conn.commit()
+
+    def yeni_mi(self, u: str) -> bool:
+        h = hashlib.sha256(u.strip().lower().encode()).hexdigest()
+        self.c.execute("SELECT 1 FROM ilanlar WHERE h=?", (h,))
+        if self.c.fetchone() is None:
+            self.c.execute("INSERT INTO ilanlar VALUES (?,?,?)", (h, u, str(datetime.now(TR_SAAT))))
+            self.conn.commit()
+            return True
+        return False
+
+    def filtrele(self, metin: str) -> str:
+        urller = re.findall(r'https?://[^\s\)\]\>"]+', metin)
+        yeniler = [u.split("?")[0].rstrip("/") for u in urller if self.yeni_mi(u.split("?")[0].rstrip("/"))]
+        return ("\n".join(yeniler) + "\n\n" + metin) if yeniler else ""
+
+def eposta_at(konu: str, html_icerik: str, duz_icerik: str):
+    msg = MIMEMultipart("alternative")
+    msg["From"], msg["To"], msg["Subject"] = GMAIL_GONDEREN, RAPOR_ALICI_EMAIL, konu
+    msg.attach(MIMEText(duz_icerik, "plain", "utf-8"))
+    msg.attach(MIMEText(html_icerik, "html", "utf-8"))
+    s = smtplib.SMTP("smtp.gmail.com", 587)
+    s.starttls()
+    s.login(GMAIL_GONDEREN, GMAIL_UYGULAMA_SIFRESI.replace(" ", ""))
+    s.send_message(msg)
+    s.quit()
+
+def html_olustur(data: RaporSemasi, tarih: str) -> str:
+    kartlar = ""
+    for i, x in enumerate(sorted(data.ilanlar, key=lambda a: a.uygunluk_puani, reverse=True), 1):
+        renk = "#dcfce7" if x.uygunluk_puani >= 8 else "#fef9c3"
+        kartlar += (
+            f'<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px;">'
+            f'<span style="background:#eff6ff;color:#1d4ed8;padding:3px 8px;border-radius:5px;font-size:12px;font-weight:700;">{html.escape(x.platform)}</span> '
+            f'<span style="background:{renk};padding:3px 8px;border-radius:5px;font-size:12px;font-weight:700;">★ {x.uygunluk_puani}/10</span>'
+            f'<h3 style="margin:10px 0;">{i}. {html.escape(x.baslik)}</h3>'
+            f'<p style="font-size:13px;color:#334155;"><b>Butce/Sure:</b> {html.escape(x.tahmini_butce_sure)}</p>'
+            f'<p style="font-size:14px;color:#475569;">{html.escape(x.neden_uygun)}</p>'
+            f'<pre style="background:#f1f5f9;padding:10px;border-radius:6px;white-space:pre-wrap;font-size:13px;">{html.escape(x.teklif_metni)}</pre>'
+            f'<a href="{html.escape(x.url)}" style="background:#2563eb;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;display:inline-block;font-weight:700;">Ilana Git →</a></div>'
+        )
+    return f'<div style="max-width:650px;margin:auto;font-family:sans-serif;background:#f8fafc;padding:16px;"><h2>Freelance Raporu ({tarih} - {SEANS})</h2><p>{html.escape(data.genel_ozet)}</p>{kartlar}</div>'
+
+SORGULAR = [
+    'site:upwork.com/freelance-jobs ("SolidWorks" OR "Sheet Metal" OR "Die Design")',
+    'site:linkedin.com/jobs ("SolidWorks" OR "Sheet Metal" OR "Tool and Die") freelance',
+    'site:linkedin.com/posts ("looking for" OR "hiring") ("SolidWorks" OR "sheet metal" OR "Mastercam")',
+    'site:freelancer.com/projects ("CNC" OR "Mastercam" OR "SolidWorks" OR "Sheet Metal")',
+    '"freelance" ("sheet metal die design" OR "progressive die" OR "stamping die")',
+    '"freelance" ("Mastercam" OR "5 axis CAM" OR "CNC programming")',
+    'site:bionluk.com ("SolidWorks" OR "3D cizim" OR "kalip tasarim" OR "CNC")',
+    '("tersine muhendislik" OR "sac kalip tasarimi" OR "progresif kalip") freelance'
+]
+
+def calistir():
+    llm = LLM(model="gemini/gemini-2.5-flash", api_key=GEMINI_API_KEY)
+    db = IlanDB()
+    profil = "Sac Metal Kalip Tasarimi (Progresif, Transfer), SolidWorks, Logopress, Mastercam CNC CAM, Tersine Muhendislik."
+
+    avci = Agent(role="Ilan Avcisi", goal="Guncel CAD/CAM ve kalip ilanlarini bulmak.", backstory="Veri madencisi.", tools=[google_ilan_ara], llm=llm, verbose=True)
+    filtre = Agent(role="Kalip Muhendisi", goal="Profilime uyan yeni ilanlari secmek.", backstory=f"Uzmanlik: {profil}", llm=llm, verbose=True)
+    raporcu = Agent(role="Teklif Yazari", goal="Secilen ilanlar icin rapor ve teklif hazirlamak.", backstory="Is gelistirme uzmani.", llm=llm, verbose=True)
+
+    bas = time.time()
+    bulunanlar = []
+    while (time.time() - bas) < TARAMA_SURESI:
+        for s in SORGULAR:
+            if (time.time() - bas) >= TARAMA_SURESI:
+                break
+            t = Task(description=f"Google ile ara ve ilan basliklariyla tam URL linklerini listele: {s}", expected_output="Ilan listesi ve URLler.", agent=avci)
+            try:
+                sonuc = db.filtrele(str(Crew(agents=[avci], tasks=[t]).kickoff()))
+                if sonuc:
+                    bulunanlar.append(sonuc)
+            except Exception as e:
+                print(e)
+            time.sleep(75)
+
+    tarih = datetime.now(TR_SAAT).strftime("%d.%m.%Y")
+    if not bulunanlar:
+        eposta_at(f"Freelance Ajan ({tarih} - {SEANS}) - Yeni Ilan Yok", f"<p>{tarih} ({SEANS}) taramasinda yeni ilan bulunamadi.</p>", "Yeni ilan bulunamadi.")
+        return
+
+    t_analiz = Task(description=f"Sadece profilime ({profil}) uyan yeni ilanlari sec ve puanla:\n\n" + "\n---\n".join(bulunanlar)[:25000], expected_output="Secilen ilanlar.", agent=filtre)
+    t_rapor = Task(description="Secilen ilanlari RaporSemasi formatinda doldur ve teklif metinlerini yaz.", expected_output="JSON rapor.", output_pydantic=RaporSemasi, agent=raporcu)
+    res = Crew(agents=[filtre, raporcu], tasks=[t_analiz, t_rapor]).kickoff()
+
+    if res.pydantic and res.pydantic.ilanlar:
+        eposta_at(f"{len(res.pydantic.ilanlar)} Yeni Freelance Firsati ({tarih} - {SEANS})", html_olustur(res.pydantic, tarih), str(res.pydantic))
+    else:
+        eposta_at(f"Freelance Raporu ({tarih} - {SEANS})", f"<pre>{html.escape(str(res))}</pre>", str(res))
+
+if __name__ == "__main__":
+    calistir()
