@@ -1,8 +1,6 @@
-import os, re, html, time, sqlite3, hashlib, smtplib
+import os, re, json, html, time, sqlite3, hashlib
 from typing import List
 from pydantic import BaseModel
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
 from google import genai
 from google.genai import types
@@ -10,16 +8,14 @@ from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import tool
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GMAIL_GONDEREN = os.environ.get("GMAIL_GONDEREN")
-GMAIL_UYGULAMA_SIFRESI = os.environ.get("GMAIL_UYGULAMA_SIFRESI")
-RAPOR_ALICI_EMAIL = os.environ.get("RAPOR_ALICI_EMAIL")
 TARAMA_SURESI = 1800
 
-if not all([GEMINI_API_KEY, GMAIL_GONDEREN, GMAIL_UYGULAMA_SIFRESI, RAPOR_ALICI_EMAIL]):
-    raise ValueError("HATA: GitHub Secrets degiskenlerinden biri eksik!")
+if not GEMINI_API_KEY:
+    raise ValueError("HATA: GEMINI_API_KEY eksik! Settings > Secrets > Actions kismindan ekleyin.")
 
 TR_SAAT = timezone(timedelta(hours=3))
-SEANS = "Sabah Seansi" if datetime.now(TR_SAAT).hour < 15 else "Aksam Seansi"
+SU_AN = datetime.now(TR_SAAT)
+SEANS = "Sabah Seansi" if SU_AN.hour < 15 else "Aksam Seansi"
 
 class IlanKarti(BaseModel):
     baslik: str
@@ -76,32 +72,120 @@ class IlanDB:
         yeniler = [u.split("?")[0].rstrip("/") for u in urller if self.yeni_mi(u.split("?")[0].rstrip("/"))]
         return ("\n".join(yeniler) + "\n\n" + metin) if yeniler else ""
 
-def eposta_at(konu: str, html_icerik: str, duz_icerik: str):
-    msg = MIMEMultipart("alternative")
-    msg["From"], msg["To"], msg["Subject"] = GMAIL_GONDEREN, RAPOR_ALICI_EMAIL, konu
-    msg.attach(MIMEText(duz_icerik, "plain", "utf-8"))
-    msg.attach(MIMEText(html_icerik, "html", "utf-8"))
-    s = smtplib.SMTP("smtp.gmail.com", 587)
-    s.starttls()
-    s.login(GMAIL_GONDEREN, GMAIL_UYGULAMA_SIFRESI.replace(" ", ""))
-    s.send_message(msg)
-    s.quit()
+def web_sayfasi_guncelle(yeni_ilanlar: List[IlanKarti], ozet: str):
+    veri_dosyasi = "jobs_data.json"
+    mevcut_liste = []
+    if os.path.exists(veri_dosyasi):
+        try:
+            with open(veri_dosyasi, "r", encoding="utf-8") as f:
+                mevcut_liste = json.load(f)
+        except Exception:
+            mevcut_liste = []
 
-def html_olustur(data: RaporSemasi, tarih: str) -> str:
-    kartlar = ""
-    for i, x in enumerate(sorted(data.ilanlar, key=lambda a: a.uygunluk_puani, reverse=True), 1):
-        renk = "#dcfce7" if x.uygunluk_puani >= 8 else "#fef9c3"
-        kartlar += (
-            f'<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px;">'
-            f'<span style="background:#eff6ff;color:#1d4ed8;padding:3px 8px;border-radius:5px;font-size:12px;font-weight:700;">{html.escape(x.platform)}</span> '
-            f'<span style="background:{renk};padding:3px 8px;border-radius:5px;font-size:12px;font-weight:700;">★ {x.uygunluk_puani}/10</span>'
-            f'<h3 style="margin:10px 0;">{i}. {html.escape(x.baslik)}</h3>'
-            f'<p style="font-size:13px;color:#334155;"><b>Butce/Sure:</b> {html.escape(x.tahmini_butce_sure)}</p>'
-            f'<p style="font-size:14px;color:#475569;">{html.escape(x.neden_uygun)}</p>'
-            f'<pre style="background:#f1f5f9;padding:10px;border-radius:6px;white-space:pre-wrap;font-size:13px;">{html.escape(x.teklif_metni)}</pre>'
-            f'<a href="{html.escape(x.url)}" style="background:#2563eb;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;display:inline-block;font-weight:700;">Ilana Git →</a></div>'
-        )
-    return f'<div style="max-width:650px;margin:auto;font-family:sans-serif;background:#f8fafc;padding:16px;"><h2>Freelance Raporu ({tarih} - {SEANS})</h2><p>{html.escape(data.genel_ozet)}</p>{kartlar}</div>'
+    tarih_etiket = datetime.now(TR_SAAT).strftime("%d.%m.%Y %H:%M")
+    for ilan in yeni_ilanlar:
+        kayit = ilan.model_dump()
+        kayit["eklenme_tarihi"] = f"{tarih_etiket} ({SEANS})"
+        mevcut_liste.insert(0, kayit)
+
+    # Son 100 ilani panelde tut
+    mevcut_liste = mevcut_liste[:100]
+    with open(veri_dosyasi, "w", encoding="utf-8") as f:
+        json.dump(mevcut_liste, f, ensure_ascii=False, indent=2)
+
+    kartlar_html = ""
+    for idx, x in enumerate(mevcut_liste, 1):
+        puan = x.get("uygunluk_puani", 7)
+        rozet_renk = "#16a34a" if puan >= 8 else "#ca8a04"
+        g_baslik = html.escape(x.get("baslik", ""))
+        g_plat = html.escape(x.get("platform", ""))
+        g_butce = html.escape(x.get("tahmini_butce_sure", ""))
+        g_neden = html.escape(x.get("neden_uygun", ""))
+        g_teklif = html.escape(x.get("teklif_metni", ""))
+        g_url = html.escape(x.get("url", "#"))
+        g_tarih = html.escape(x.get("eklenme_tarihi", ""))
+
+        kartlar_html += f"""
+        <div class="card" data-platform="{g_plat.lower()}">
+            <div class="card-top">
+                <div>
+                    <span class="badge-plat">{g_plat}</span>
+                    <span class="badge-score" style="background:{rozet_renk};">★ {puan}/10</span>
+                </div>
+                <span class="date-tag">{g_tarih}</span>
+            </div>
+            <h3>{g_baslik}</h3>
+            <div class="budget">💰 {g_butce}</div>
+            <p class="desc">{g_neden}</p>
+            <div class="proposal-box">
+                <div class="prop-header">
+                    <span>Hazir Teklif Metni</span>
+                    <button onclick="kopyala(this)" class="btn-copy">Kopyala</button>
+                </div>
+                <pre>{g_teklif}</pre>
+            </div>
+            <div class="card-actions">
+                <a href="{g_url}" target="_blank" class="btn-apply">Ilana Git & Basvur →</a>
+            </div>
+        </div>
+        """
+
+    if not kartlar_html:
+        kartlar_html = '<div class="empty">Henuz yeni ilan yakalanmadi. Bir sonraki otomatik taramada burasi dolacaktir.</div>'
+
+    sayfa_html = f"""<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Otonom Freelance Is Panosu</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }}
+  .container {{ max-width: 900px; margin: auto; }}
+  .header {{ background: linear-gradient(135deg, #1e293b, #334155); padding: 24px; border-radius: 16px; margin-bottom: 24px; border: 1px solid #475569; }}
+  .header h1 {{ margin: 0 0 8px 0; font-size: 24px; color: #38bdf8; }}
+  .header p {{ margin: 0; color: #cbd5e1; font-size: 14px; }}
+  .card {{ background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 20px; margin-bottom: 18px; }}
+  .card-top {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
+  .badge-plat {{ background: #0284c7; color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; }}
+  .badge-score {{ color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; margin-left: 6px; }}
+  .date-tag {{ font-size: 12px; color: #94a3b8; }}
+  h3 {{ margin: 8px 0 12px 0; font-size: 18px; color: #f1f5f9; }}
+  .budget {{ background: #0f172a; padding: 8px 12px; border-radius: 8px; font-size: 13px; color: #38bdf8; margin-bottom: 12px; border-left: 3px solid #38bdf8; }}
+  .desc {{ font-size: 14px; color: #cbd5e1; line-height: 1.5; margin-bottom: 14px; }}
+  .proposal-box {{ background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px; margin-bottom: 16px; }}
+  .prop-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; color: #94a3b8; }}
+  pre {{ margin: 0; white-space: pre-wrap; font-family: monospace; font-size: 13px; color: #e2e8f0; }}
+  .btn-copy {{ background: #334155; color: #fff; border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }}
+  .btn-copy:hover {{ background: #475569; }}
+  .card-actions {{ text-align: right; }}
+  .btn-apply {{ background: #2563eb; color: #fff; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 14px; display: inline-block; }}
+  .btn-apply:hover {{ background: #1d4ed8; }}
+  .empty {{ text-align: center; padding: 40px; background: #1e293b; border-radius: 12px; color: #94a3b8; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>Otonom CAD/CAM & Kalip Muhendisligi Is Panosu</h1>
+    <p>Son Guncelleme: {tarih_etiket} ({SEANS}) | Toplam Arsivlenen Firsat: {len(mevcut_liste)}</p>
+    <p style="margin-top:8px; color:#93c5fd;">{html.escape(ozet)}</p>
+  </div>
+  {kartlar_html}
+</div>
+<script>
+function kopyala(btn) {{
+  const metin = btn.parentElement.nextElementSibling.innerText;
+  navigator.clipboard.writeText(metin);
+  btn.innerText = "Kopyalandi!";
+  setTimeout(() => btn.innerText = "Kopyala", 2000);
+}}
+</script>
+</body>
+</html>"""
+
+    with open("index.html", "w", encoding="utf-8") as f:
+        f.write(sayfa_html)
 
 SORGULAR = [
     'site:upwork.com/freelance-jobs ("SolidWorks" OR "Sheet Metal" OR "Die Design")',
@@ -138,9 +222,8 @@ def calistir():
                 print(e)
             time.sleep(75)
 
-    tarih = datetime.now(TR_SAAT).strftime("%d.%m.%Y")
     if not bulunanlar:
-        eposta_at(f"Freelance Ajan ({tarih} - {SEANS}) - Yeni Ilan Yok", f"<p>{tarih} ({SEANS}) taramasinda yeni ilan bulunamadi.</p>", "Yeni ilan bulunamadi.")
+        web_sayfasi_guncelle([], "Son taramada kriterlerinize uyan yeni bir ilan tespit edilmedi.")
         return
 
     t_analiz = Task(description=f"Sadece profilime ({profil}) uyan yeni ilanlari sec ve puanla:\n\n" + "\n---\n".join(bulunanlar)[:25000], expected_output="Secilen ilanlar.", agent=filtre)
@@ -148,9 +231,9 @@ def calistir():
     res = Crew(agents=[filtre, raporcu], tasks=[t_analiz, t_rapor]).kickoff()
 
     if res.pydantic and res.pydantic.ilanlar:
-        eposta_at(f"{len(res.pydantic.ilanlar)} Yeni Freelance Firsati ({tarih} - {SEANS})", html_olustur(res.pydantic, tarih), str(res.pydantic))
+        web_sayfasi_guncelle(res.pydantic.ilanlar, res.pydantic.genel_ozet)
     else:
-        eposta_at(f"Freelance Raporu ({tarih} - {SEANS})", f"<pre>{html.escape(str(res))}</pre>", str(res))
+        web_sayfasi_guncelle([], "Tarama tamamlandi, yeni uygun firsat bulunamadi.")
 
 if __name__ == "__main__":
     calistir()
