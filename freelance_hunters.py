@@ -1,9 +1,13 @@
 import os
 import re
+import json
+import html
 import time
 import sqlite3
 import hashlib
 import smtplib
+from typing import List
+from pydantic import BaseModel, Field
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
@@ -24,13 +28,28 @@ TARAMA_SURESI_SANIYE = 1800  # 30 Dakika = 1800 saniye
 if not all([GEMINI_API_KEY, GMAIL_GONDEREN, GMAIL_UYGULAMA_SIFRESI, RAPOR_ALICI_EMAIL]):
     raise ValueError("HATA: GitHub Secrets değişkenlerinden biri eksik! Lütfen depo ayarlarını kontrol edin.")
 
-# Türkiye Saati (UTC+3) ve Seans Belirleme
 TR_SAAT_DILIMI = timezone(timedelta(hours=3))
 su_an_tr = datetime.now(TR_SAAT_DILIMI)
 SEANS_ADI = "Sabah Seansı" if su_an_tr.hour < 15 else "Akşam Seansı"
 
 # ==============================================================================
-# 2. GOOGLE AI STUDIO CANLI WEB ARAMA ARACI
+# 2. YAPI LANDIRILMIŞ RAPOR ŞEMASI (HTML KARTLAR İÇİN HATASIZ VERİ)
+# ==============================================================================
+class FreelanceIlanKarti(BaseModel):
+    baslik: str = Field(description="İlanın tam başlığı")
+    platform: str = Field(description="Yayınlandığı platform (örn: Upwork, LinkedIn, Bionluk)")
+    url: str = Field(description="İlanın doğrudan başvuru URL linki")
+    uygunluk_puani: int = Field(description="1 ile 10 arasında teknik uygunluk puanı")
+    tahmini_butce_sure: str = Field(description="Tahmini bütçe ve teslim süresi (örn: $600 - $1,000 | 5-7 Gün)")
+    neden_uygun: str = Field(description="Bu ilanın neden seçildiğini anlatan 2 cümlelik teknik özet")
+    teklif_metni: str = Field(description="Müşteriye gönderilecek ikna edici hazır teklif metni (İngilizce ilanlara İngilizce, Türkçe ilanlara Türkçe)")
+
+class GunlukRaporSemasi(BaseModel):
+    genel_ozet: str = Field(description="Bu seanstaki fırsatların 2 cümlelik yönetici özeti")
+    ilanlar: List[FreelanceIlanKarti] = Field(description="Onaylanan en iyi freelance ilanları listesi")
+
+# ==============================================================================
+# 3. GOOGLE AI STUDIO CANLI WEB ARAMA ARACI
 # ==============================================================================
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -73,7 +92,7 @@ def canli_google_arama(arama_sorgusu: str) -> str:
         return f"Arama sırasında hata oluştu: {e}"
 
 # ==============================================================================
-# 3. TEKRAR ÖNLEYİCİ VERİTABANI (SQLITE DEDUPLICATION)
+# 4. TEKRAR ÖNLEYİCİ VERİTABANI (SQLITE DEDUPLICATION)
 # ==============================================================================
 class TekrarOnleyiciDB:
     def __init__(self, db_yolu="seen_jobs.db"):
@@ -128,15 +147,129 @@ class TekrarOnleyiciDB:
         return "YENİ TESPİT EDİLEN İLAN LİNKLERİ:\n" + "\n".join(yeni_urller) + f"\n\nDETAYLAR:\n{ham_cikti}"
 
 # ==============================================================================
-# 4. E-POSTA GÖNDERİM MODÜLÜ
+# 5. ŞIK HTML E-POSTA ŞABLON OLUŞTURUCU VE GÖNDERİCİ
 # ==============================================================================
-def eposta_gonder(konu: str, icerik_markdown: str):
-    msg = MIMEMultipart()
+def html_rapor_olustur(tarih_str: str, seans: str, rapor_verisi: GunlukRaporSemasi) -> str:
+    kartlar_html = ""
+    
+    # Puanı en yüksek ilandan en düşüğe sırala
+    sirali_ilanlar = sorted(rapor_verisi.ilanlar, key=lambda x: x.uygunluk_puani, reverse=True)
+    
+    for idx, ilan in enumerate(sirali_ilanlar, 1):
+        # Uygunluk puanına göre rozet rengi
+        if ilan.uygunluk_puani >= 8:
+            rozet_bg = "#dcfce7"
+            rozet_renk = "#166534"
+            rozet_etiket = f"★ {ilan.uygunluk_puani}/10 Yüksek Uyum"
+        elif ilan.uygunluk_puani >= 6:
+            rozet_bg = "#fef9c3"
+            rozet_renk = "#854d0e"
+            rozet_etiket = f"● {ilan.uygunluk_puani}/10 Orta Uyum"
+        else:
+            rozet_bg = "#f1f5f9"
+            rozet_renk = "#475569"
+            rozet_etiket = f"○ {ilan.uygunluk_puani}/10 Alternatif"
+
+        guvenli_baslik = html.escape(ilan.baslik)
+        guvenli_platform = html.escape(ilan.platform)
+        guvenli_butce = html.escape(ilan.tahmini_butce_sure)
+        guvenli_neden = html.escape(ilan.neden_uygun)
+        guvenli_teklif = html.escape(ilan.teklif_metni).replace("\n", "<br>")
+        guvenli_url = html.escape(ilan.url)
+
+        kartlar_html += f"""
+        <div style="background-color:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:22px; margin-bottom:22px; box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+            <div style="margin-bottom:12px;">
+                <span style="display:inline-block; background-color:#eff6ff; color:#1d4ed8; font-size:12px; font-weight:700; padding:4px 10px; border-radius:6px; text-transform:uppercase; letter-spacing:0.5px; margin-right:8px;">
+                    {guvenli_platform}
+                </span>
+                <span style="display:inline-block; background-color:{rozet_bg}; color:{rozet_renk}; font-size:12px; font-weight:700; padding:4px 10px; border-radius:6px;">
+                    {rozet_etiket}
+                </span>
+            </div>
+
+            <h2 style="margin:0 0 10px 0; font-size:18px; color:#0f172a; line-height:1.4;">
+                {idx}. {guvenli_baslik}
+            </h2>
+
+            <div style="background-color:#f8fafc; border-left:3px solid #3b82f6; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#334155;">
+                <strong>💰 Tahmini Bütçe & Süre:</strong> {guvenli_butce}
+            </div>
+
+            <p style="margin:0 0 16px 0; font-size:14px; color:#475569; line-height:1.6;">
+                <strong style="color:#1e293b;">Teknik Değerlendirme:</strong> {guvenli_neden}
+            </p>
+
+            <div style="margin-bottom:18px;">
+                <div style="font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; margin-bottom:6px; letter-spacing:0.5px;">
+                    📋 Kopyala & Gönder Teklif Taslağı (Metne tıklayıp seçebilirsiniz):
+                </div>
+                <div style="background-color:#f1f5f9; border:1px dashed #94a3b8; border-radius:8px; padding:14px; font-family:'Courier New', Courier, monospace; font-size:13px; color:#1e293b; line-height:1.5; user-select:all; -webkit-user-select:all;">
+                    {guvenli_teklif}
+                </div>
+            </div>
+
+            <div style="text-align:right;">
+                <a href="{guvenli_url}" target="_blank" style="display:inline-block; background-color:#2563eb; color:#ffffff; text-decoration:none; font-weight:700; font-size:14px; padding:11px 22px; border-radius:8px;">
+                    İlana Git & Başvur →
+                </a>
+            </div>
+        </div>
+        """
+
+    tam_html = f"""
+    <!DOCTYPE html>
+    <html lang="tr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="margin:0; padding:0; background-color:#f1f5f9; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        <div style="max-width:680px; margin:24px auto; padding:0 16px;">
+            
+            <!-- Üst Başlık (Header) -->
+            <div style="background:linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color:#ffffff; padding:28px 24px; border-radius:14px; margin-bottom:20px;">
+                <div style="font-size:12px; color:#93c5fd; font-weight:700; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">
+                    Otonom CAD/CAM & Kalıp Mühendisliği İlan Ağı
+                </div>
+                <h1 style="margin:0 0 8px 0; font-size:22px; font-weight:800;">
+                    Yeni Freelance Fırsatları Raporu
+                </h1>
+                <div style="font-size:13px; color:#cbd5e1;">
+                    📅 {tarih_str} &nbsp;|&nbsp; 🕒 {seans} &nbsp;|&nbsp; 🎯 {len(sirali_ilanlar)} Yeni Fırsat
+                </div>
+            </div>
+
+            <!-- Yönetici Özeti -->
+            <div style="background-color:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:18px 22px; margin-bottom:22px;">
+                <div style="font-size:13px; font-weight:700; color:#0f172a; margin-bottom:6px;">📌 Seans Özeti</div>
+                <p style="margin:0; font-size:14px; color:#475569; line-height:1.5;">
+                    {html.escape(rapor_verisi.genel_ozet)}
+                </p>
+            </div>
+
+            <!-- İlan Kartları -->
+            {kartlar_html}
+
+            <!-- Alt Bilgi (Footer) -->
+            <div style="text-align:center; padding:16px; font-size:12px; color:#94a3b8;">
+                Bu rapor Google AI Studio (Gemini 2.5 Flash) otonom ajan ağı tarafından oluşturulmuştur.<br>
+                Daha önce raporlanan ilanlar SQLite veritabanı ile otomatik filtrelenmiştir.
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return tam_html
+
+def eposta_gonder_html(konu: str, html_icerik: str, duz_metin_yedek: str):
+    msg = MIMEMultipart("alternative")
     msg['From'] = GMAIL_GONDEREN
     msg['To'] = RAPOR_ALICI_EMAIL
     msg['Subject'] = konu
 
-    msg.attach(MIMEText(icerik_markdown, 'plain', 'utf-8'))
+    msg.attach(MIMEText(duz_metin_yedek, 'plain', 'utf-8'))
+    msg.attach(MIMEText(html_icerik, 'html', 'utf-8'))
 
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
@@ -144,124 +277,7 @@ def eposta_gonder(konu: str, icerik_markdown: str):
         server.login(GMAIL_GONDEREN, GMAIL_UYGULAMA_SIFRESI.replace(" ", ""))
         server.send_message(msg)
         server.quit()
-        print(f"[{datetime.now(TR_SAAT_DILIMI).strftime('%H:%M:%S')}] Rapor e-posta olarak başarıyla gönderildi!")
-    except Exception as e:
-        print(f"E-posta gönderim hatası: {e}")
-
-# ==============================================================================
-# 5. UZMANLIK PROFİLİ VE AJANLAR
-# ==============================================================================
-UZMANLIK_PROFILI = """
-- Ana Uzmanlık: Sac Metal Kalıp Tasarımı (Progresif, Transfer, Kesme/Bükme Kalıpları)
-- Yazılımlar: SolidWorks, Logopress, Mastercam (CNC Freze/Torna CAM), Blender
-- Ek Yetkinlikler: Tersine Mühendislik (3D Tarama datası katılaştırma), Özel Makine/Aparat Tasarımı, 3D Baskı Prototipleme
-- Hedef Pazar: Küresel (Upwork, LinkedIn, Freelancer, Fiverr, GrabCAD) ve Yerel (Bionluk, proje bazlı ilanlar)
-"""
-
-ARAMA_KATEGORI_LISTESI = [
-    'site:upwork.com/freelance-jobs ("SolidWorks" OR "Sheet Metal" OR "Die Design")',
-    'site:linkedin.com/jobs ("SolidWorks" OR "Sheet Metal" OR "Tool and Die") ("contract" OR "freelance" OR "remote")',
-    'site:linkedin.com/posts ("looking for" OR "hiring") ("SolidWorks" OR "sheet metal" OR "Mastercam") freelance',
-    'site:freelancer.com/projects ("CNC" OR "Mastercam" OR "SolidWorks" OR "Sheet Metal")',
-    '"freelance" ("sheet metal die design" OR "progressive die" OR "stamping die") project',
-    '"freelance" ("Mastercam" OR "5 axis CAM" OR "CNC programming") remote',
-    'site:bionluk.com ("SolidWorks" OR "3D çizim" OR "kalıp tasarım" OR "CNC")',
-    '("tersine mühendislik" OR "sac kalıp tasarımı" OR "progresif kalıp") freelance proje'
-]
-
-def ana_calistirici():
-    gemini_llm = LLM(
-        model="gemini/gemini-2.5-flash",
-        api_key=GEMINI_API_KEY
-    )
-
-    db = TekrarOnleyiciDB()
-
-    avci_ajan = Agent(
-        role='Kıdemli Freelance İlan Araştırmacısı',
-        goal='Canlı Google Arama aracını kullanarak sadece yeni yayınlanmış CAD/CAM, CNC ve sac kalıp tasarımı ilanlarının doğrudan linklerini bulmak.',
-        backstory='Google Dorking ve Upwork/LinkedIn ilan avcılığında uzman veri madencisi. Her ilanın tam URL adresini ve özetini eksiksiz raporlar.',
-        tools=[canli_google_arama],
-        llm=gemini_llm,
-        verbose=True,
-        allow_delegation=False
-    )
-
-    filtre_ajan = Agent(
-        role='Teknik Proje Analisti ve Kalıp Mühendisi',
-        goal='Sadece ilk kez bulunan ilanları incelemek, alakasız/düşük bütçeli işleri eleyip uzmanlık profiline uyanları seçmek.',
-        backstory=f'20 yıllık sac kalıp ve CNC tecrübesine sahip baş mühendis. Kriterler:\n{UZMANLIK_PROFILI}',
-        llm=gemini_llm,
-        verbose=True,
-        allow_delegation=False
-    )
-
-    rapor_ajan = Agent(
-        role='İş Geliştirme ve Teklif Stratejisti',
-        goal='Onaylanan yeni ilanlar için Türkçe özet, tahmini fiyat/süre analizi ve müşteriye gönderilecek hazır teklif metni hazırlamak.',
-        backstory='Yüksek dönüşüm oranlı freelance teklifleri hazırlayan kıdemli iş geliştirme danışmanı.',
-        llm=gemini_llm,
-        verbose=True,
-        allow_delegation=False
-    )
-
-    baslangic_zamani = time.time()
-    yeni_bulunan_ham_veriler = []
-    
-    print(f"[{datetime.now(TR_SAAT_DILIMI).strftime('%H:%M:%S')}] {SEANS_ADI} - 30 Dakikalık Bulut Taraması Başladı...")
-
-    while (time.time() - baslangic_zamani) < TARAMA_SURESI_SANIYE:
-        for sorgu in ARAMA_KATEGORI_LISTESI:
-            if (time.time() - baslangic_zamani) >= TARAMA_SURESI_SANIYE:
-                break
-                
-            tarama_gorevi = Task(
-                description=f"Canlı Google İş İlanı Arama aracını kullanarak şu sorgudaki en güncel freelance iş ilanlarını bul. Her ilanın BAŞLIĞINI, AÇIKLAMASINI ve TAM URL LİNKİNİ mutlaka yaz: {sorgu}",
-                expected_output="İlan başlığı, kısa özet ve doğrudan URL bağlantıları listesi.",
-                agent=avci_ajan
-            )
-            
-            ekip = Crew(agents=[avci_ajan], tasks=[tarama_gorevi], process=Process.sequential)
-            
-            try:
-                sonuc_metni = str(ekip.kickoff())
-                filtrelenmis_yeni_veri = db.metni_filtrele(sonuc_metni)
-                
-                if filtrelenmis_yeni_veri:
-                    yeni_bulunan_ham_veriler.append(filtrelenmis_yeni_veri)
-                    print(f"[{datetime.now(TR_SAAT_DILIMI).strftime('%H:%M:%S')}] + Yeni benzersiz ilanlar yakalandı ve veritabanına işlendi.")
-                else:
-                    print(f"[{datetime.now(TR_SAAT_DILIMI).strftime('%H:%M:%S')}] - Yeni ilan bulunamadı veya tümü daha önce raporlanmış.")
-            except Exception as e:
-                print(f"Tarama hatası (devam ediliyor): {e}")
-                
-            time.sleep(75)
-
-    tarih_str = datetime.now(TR_SAAT_DILIMI).strftime("%d.%m.%Y")
-    
-    if not yeni_bulunan_ham_veriler:
-        bos_rapor = f"{tarih_str} ({SEANS_ADI}) tarihli 30 dakikalık bulut taraması tamamlandı.\n\nSon taramadan bu yana kriterlerinize uyan yeni bir freelance iş ilanı tespit edilmedi."
-        eposta_gonder(f"Freelance Ajan ({tarih_str} - {SEANS_ADI}) - Yeni İlan Yok", bos_rapor)
-        return
-
-    ham_veri_metni = "\n\n---\n\n".join(yeni_bulunan_ham_veriler)
-
-    analiz_gorevi = Task(
-        description=f"Aşağıdaki SADECE YENİ BULUNMUŞ ilan verilerini incele. Uzmanlık profiline ({UZMANLIK_PROFILI}) uymayanları ele, uygun olanları 10 üzerinden puanla:\n\n{ham_veri_metni[:25000]}",
-        expected_output="Puanlanmış ve doğrulanmış yeni iş ilanları listesi.",
-        agent=filtre_ajan
-    )
-
-    rapor_gorevi = Task(
-        description="Seçilen yeni iş ilanları için net bir e-posta raporu yaz. Her ilan için: 1) Başlık ve Doğrudan Link, 2) Tahmini Bütçe ve Süre, 3) Neden Uygun Olduğu, 4) Müşteriye Gönderilecek Hazır Teklif Metni (İngilizce ilanlara İngilizce, Türkçe ilanlara Türkçe) yer alsın.",
-        expected_output="E-posta ile gönderilmeye hazır temiz metin raporu.",
-        agent=rapor_ajan
-    )
-
-    rapor_ekibi = Crew(agents=[filtre_ajan, rapor_ajan], tasks=[analiz_gorevi, rapor_gorevi], process=Process.sequential)
-    nihai_rapor = str(rapor_ekibi.kickoff())
-
-    eposta_gonder(f"Yeni Freelance Fırsatları ({tarih_str} - {SEANS_ADI})", nihai_rapor)
+        print
 
 if __name__ == "__main__":
     ana_calistirici()
