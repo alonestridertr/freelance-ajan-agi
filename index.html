@@ -6,11 +6,19 @@
 <title>Otonom Freelance Is Panosu</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
-  .container { max-width: 900px; margin: auto; }
-  .header { background: linear-gradient(135deg, #1e293b, #334155); padding: 24px; border-radius: 16px; margin-bottom: 24px; border: 1px solid #475569; }
-  .header h1 { margin: 0 0 8px 0; font-size: 24px; color: #38bdf8; }
+  .container { max-width: 920px; margin: auto; }
+  .header { background: linear-gradient(135deg, #1e293b, #334155); padding: 24px; border-radius: 16px; margin-bottom: 18px; border: 1px solid #475569; }
+  .header h1 { margin: 0 0 8px 0; font-size: 23px; color: #38bdf8; }
   .header p { margin: 0; color: #cbd5e1; font-size: 14px; }
-  .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 20px; margin-bottom: 18px; }
+  .stats { display: flex; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .stat-box { background: #0f172a; border: 1px solid #334155; padding: 8px 14px; border-radius: 8px; font-size: 13px; color: #e2e8f0; }
+  details.audit-log { background: #1e293b; border: 1px solid #38bdf8; border-radius: 12px; padding: 14px 18px; margin-bottom: 20px; }
+  details.audit-log summary { cursor: pointer; font-weight: 700; color: #38bdf8; font-size: 15px; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+  .filter-btn { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 6px 14px; border-radius: 20px; cursor: pointer; font-size: 13px; }
+  .filter-btn.active, .filter-btn:hover { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 20px; margin-bottom: 18px; transition: opacity 0.2s; }
+  .card.applied { opacity: 0.45; border-color: #16a34a; }
   .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   .badge-plat { background: #0284c7; color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; }
   .badge-score { color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; margin-left: 6px; }
@@ -22,21 +30,34 @@
   .prop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; color: #94a3b8; }
   pre { margin: 0; white-space: pre-wrap; font-family: monospace; font-size: 13px; color: #e2e8f0; }
   .btn-copy { background: #334155; color: #fff; border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
-  .btn-copy:hover { background: #475569; }
-  .card-actions { text-align: right; }
-  .btn-apply { background: #2563eb; color: #fff; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 14px; display: inline-block; }
-  .btn-apply:hover { background: #1d4ed8; }
+  .card-actions { display: flex; justify-content: space-between; align-items: center; }
+  .btn-done { background: #334155; color: #e2e8f0; border: none; padding: 9px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+  .btn-apply { background: #2563eb; color: #fff; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 14px; }
   .empty { text-align: center; padding: 40px; background: #1e293b; border-radius: 12px; color: #94a3b8; }
 </style>
 </head>
 <body>
 <div class="container">
   <div class="header">
-    <h1>Otonom CAD/CAM & Kalip Muhendisligi Is Panosu (Agresif Mod)</h1>
-    <p>Son Guncelleme: 17.11.2026 10:21 (Sabah Seansi) | Toplam Arsivlenen Firsat: 0</p>
-    <p style="margin-top:8px; color:#93c5fd;">Son agresif taramada kriterlerinize uyan yeni bir ilan tespit edilmedi.</p>
+    <h1>Otonom CAD/CAM & Kalip Muhendisligi Is Panosu</h1>
+    <p>Son Guncelleme: 17.11.2026 11:38 (Sabah Seansi)</p>
+    <div class="stats">
+      <div class="stat-box">🔍 Yapilan Sorgu: <b>0</b></div>
+      <div class="stat-box">🌐 Girilen/Dogrulanan Sayfa: <b>0</b></div>
+      <div class="stat-box">🎯 Arsivlenen Firsat: <b>0</b></div>
+    </div>
+    <p style="margin-top:12px; color:#93c5fd;">Son agresif taramada daha once gorulmemis yeni bir ilan tespit edilmedi. Yukaridaki gunlukten taranan siteleri inceleyebilirsiniz.</p>
   </div>
-  <div class="empty">Henuz yeni ilan yakalanmadi. Bir sonraki otomatik taramada burasi dolacaktir.</div>
+
+  <details class="audit-log" open>
+    <summary>📡 Canli Tarama Gunlugu: Ajanlar Hangi Sitelere Girdi & Ne Buldu? (0 Sorgu / 0 Dogrulanmis Link)</summary>
+    <div style="margin-top:12px; max-height:420px; overflow-y:auto;">
+      <p style="color:#94a3b8;font-size:13px;">Henuz tarama kaydi olusmadi.</p>
+    </div>
+  </details>
+
+  <div class="filters"><button onclick="filtrele('hepsi', this)" class="filter-btn active">Tumu</button></div>
+  <div class="empty">Henuz yeni ilan yakalanmadi. Yukaridaki Canli Tarama Gunlugunden ajanlarin hangi sitelere girdigini inceleyebilirsiniz.</div>
 </div>
 <script>
 function kopyala(btn) {
@@ -45,6 +66,30 @@ function kopyala(btn) {
   btn.innerText = "Kopyalandi!";
   setTimeout(() => btn.innerText = "Kopyala", 2000);
 }
+function filtrele(plat, btn) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.card').forEach(c => {
+    c.style.display = (plat === 'hepsi' || c.dataset.platform.includes(plat)) ? 'block' : 'none';
+  });
+}
+function basvurulduIsaretle(id) {
+  const card = document.getElementById('card-' + id);
+  const btn = document.getElementById('btn-' + id);
+  const durum = card.classList.toggle('applied');
+  localStorage.setItem('applied_' + id, durum ? '1' : '0');
+  btn.innerText = durum ? '✓ Basvuruldu (Geri Al)' : '✓ Basvuruldu Isaretle';
+}
+window.onload = () => {
+  document.querySelectorAll('.card').forEach(c => {
+    const id = c.id.replace('card-', '');
+    if (localStorage.getItem('applied_' + id) === '1') {
+      c.classList.add('applied');
+      const btn = document.getElementById('btn-' + id);
+      if (btn) btn.innerText = '✓ Basvuruldu (Geri Al)';
+    }
+  });
+};
 </script>
 </body>
 </html>
