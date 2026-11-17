@@ -4,20 +4,18 @@ from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
 from google import genai
 from google.genai import types
-from crewai import Agent, Task, Crew, Process, LLM
-from crewai.tools import tool
+from crewai import Agent, Task, Crew, LLM
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-TARAMA_SURESI = 1800
+TARAMA_SURESI = 900  # 15 Dakika (20 sorgunun tamamina kesintisiz ulasmak icin ideal sure)
 
 if not GEMINI_API_KEY:
-    raise ValueError("HATA: GEMINI_API_KEY eksik! Settings > Secrets > Actions kismindan ekleyin.")
+    raise ValueError("HATA: GEMINI_API_KEY eksik!")
 
 TR_SAAT = timezone(timedelta(hours=3))
 SU_AN = datetime.now(TR_SAAT)
 SEANS = "Sabah Seansi" if SU_AN.hour < 15 else "Aksam Seansi"
 
-# Her taramada gercekten ulasilan siteleri ve ozetleri tutan global gunluk
 TARAMA_GUNLUGU = []
 
 class IlanKarti(BaseModel):
@@ -35,50 +33,53 @@ class RaporSemasi(BaseModel):
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-@tool("Agresif Canli Web Is Ilani Kaziyici")
-def google_ilan_ara(sorgu: str) -> str:
-    """Google Search ile tum internetteki en guncel CAD/CAM, CNC ve sac kalip projelerini bulur ve gercek URL kaynaklarini dogrular."""
+def dogrudan_google_ara(sorgu: str) -> str:
+    """CrewAI arac katmanini bypass ederek dogrudan Google Search Grounding ile canli sitelere girer."""
     prompt = (
-        f"Agresif bir teknik proje avcisi gibi davran. Asagidaki arama sorgusuyla TUM INTERNETTEKI "
-        f"(Upwork, Cad Crowd, LinkedIn ilanlari ve gonderileri, GrabCAD, Guru, PeoplePerHour, Freelancer, "
-        f"Fiverr, Reddit, X, Bionluk, sirket web siteleri vb.) EN GUNCEL freelance, sozlesmeli veya proje bazli "
-        f"is firsatlarini bul. Her birinin tam basligini, platformunu, butce/sure bilgisini ve DOGRUDAN URL LINKINI listele:\n{sorgu}"
+        f"Google Search kullanarak internetteki su sorguyla ilgili EN GUNCEL freelance is ilanlarini, "
+        f"proje taleplerini ve acik pozisyonlari bul:\nSorgu: {sorgu}\n\n"
+        f"Buldugun her ilanin tam basligini, platformunu, butce/sure bilgisini ve URL adresini yaz."
     )
     try:
         resp = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(tools=[{"google_search": {}}], temperature=0.2)
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=0.1
+            )
         )
         dogrulanmis_kaynaklar = []
         if resp.candidates and resp.candidates[0].grounding_metadata:
-            for c in (resp.candidates[0].grounding_metadata.grounding_chunks or []):
+            chunks = resp.candidates[0].grounding_metadata.grounding_chunks or []
+            for c in chunks:
                 if c.web and c.web.uri:
                     dogrulanmis_kaynaklar.append({
-                        "baslik": c.web.title or "Web Sayfasi",
+                        "baslik": c.web.title or "Web Kaynagi",
                         "url": c.web.uri
                     })
 
-        # Gunluge gercek ulasilan siteleri kaydet
+        ham_metin = resp.text or ""
         TARAMA_GUNLUGU.append({
             "saat": datetime.now(TR_SAAT).strftime("%H:%M:%S"),
             "sorgu": sorgu,
             "ulasilan_site_sayisi": len(dogrulanmis_kaynaklar),
-            "siteler": dogrulanmis_kaynaklar[:8],
-            "ham_ozet": (resp.text or "")[:450] + ("..." if len(resp.text or "") > 450 else "")
+            "siteler": dogrulanmis_kaynaklar[:10],
+            "ham_ozet": ham_metin[:450] + ("..." if len(ham_metin) > 450 else "")
         })
 
-        link_metni = "\n".join([f"- {k['baslik']}: {k['url']}" for k in dogrulanmis_kaynaklar])
-        return f"{resp.text}\n\nDOGRULANMIS GERCEK KAYNAKLAR:\n{link_metni}"
+        link_listesi = "\n".join([f"- {k['baslik']}: {k['url']}" for k in dogrulanmis_kaynaklar])
+        return f"SORGU: {sorgu}\nBULGULAR:\n{ham_metin}\n\nDOGRULANMIS LINKLER:\n{link_listesi}"
     except Exception as e:
+        hata_str = str(e)
         TARAMA_GUNLUGU.append({
             "saat": datetime.now(TR_SAAT).strftime("%H:%M:%S"),
             "sorgu": sorgu,
             "ulasilan_site_sayisi": 0,
             "siteler": [],
-            "ham_ozet": f"Sorgu sirasinda hata: {e}"
+            "ham_ozet": f"API/Arama Hatasi: {hata_str[:300]}"
         })
-        return f"Arama hatasi: {e}"
+        return ""
 
 class IlanDB:
     def __init__(self, db="seen_jobs.db"):
@@ -97,6 +98,8 @@ class IlanDB:
         return False
 
     def filtrele(self, metin: str) -> str:
+        if not metin:
+            return ""
         urller = re.findall(r'https?://[^\s\)\]\>"]+', metin)
         yeniler = [u.split("?")[0].rstrip("/") for u in urller if self.yeni_mi(u.split("?")[0].rstrip("/"))]
         return ("\n".join(yeniler) + "\n\n" + metin) if yeniler else ""
@@ -121,7 +124,6 @@ def web_sayfasi_guncelle(yeni_ilanlar: List[IlanKarti], ozet: str):
     with open(veri_dosyasi, "w", encoding="utf-8") as f:
         json.dump(mevcut_liste, f, ensure_ascii=False, indent=2)
 
-    # Canli Tarama Gunlugu HTML'i olustur
     toplam_sorgu = len(TARAMA_GUNLUGU)
     toplam_ulasilan_site = sum(g["ulasilan_site_sayisi"] for g in TARAMA_GUNLUGU)
     gunluk_satirlari = ""
@@ -141,18 +143,14 @@ def web_sayfasi_guncelle(yeni_ilanlar: List[IlanKarti], ozet: str):
             </div>
             <ul style="margin:6px 0;padding-left:18px;font-size:12px;line-height:1.5;">{site_linkleri}</ul>
             <div style="font-size:12px;color:#cbd5e1;background:#1e293b;padding:8px;border-radius:6px;margin-top:6px;">
-                <b>Ajan Ham Ozeti:</b> {html.escape(g['ham_ozet'])}
+                <b>Ham Bulgu Ozeti:</b> {html.escape(g['ham_ozet'])}
             </div>
         </div>
         """
 
-    if not gunluk_satirlari:
-        gunluk_satirlari = '<p style="color:#94a3b8;font-size:13px;">Henuz tarama kaydi olusmadi.</p>'
-
-    # Ilan Kartlari HTML'i
     kartlar_html = ""
     platformlar = set()
-    for idx, x in enumerate(mevcut_liste, 1):
+    for x in mevcut_liste:
         puan = x.get("uygunluk_puani", 7)
         rozet_renk = "#16a34a" if puan >= 8 else "#ca8a04"
         g_baslik = html.escape(x.get("baslik", ""))
@@ -312,57 +310,49 @@ SORGULAR = [
     '"freelance" ("Logopress" OR "3D QuickPress" OR "sheet metal tooling" OR "forming die")',
     '"freelance" ("Mastercam" OR "5 axis CAM" OR "CNC programming" OR "G-code")',
     '"freelance" ("reverse engineering" OR "scan to CAD" OR "STEP file" OR "STL to SolidWorks")',
-    '"looking for a freelance" ("SolidWorks" OR "mechanical engineer" OR "toolmaker" OR "CAD")',
-    '"contract" ("sheet metal design" OR "fixture design" OR "jig and fixture") remote',
     'site:bionluk.com ("SolidWorks" OR "3D cizim" OR "kalip tasarim" OR "CNC" OR "sac metal")',
-    '("sac kalip tasarimi" OR "progresif kalip" OR "kesme kalibi" OR "bukme kalibi") freelance proje',
-    '("SolidWorks" OR "Mastercam" OR "tersine muhendislik") ("freelance" OR "proje bazli" OR "disaridan")',
-    '("fason kalip tasarimi" OR "makine tasarimi freelance" OR "3D kati modelleme is ilani")'
+    '("sac kalip tasarimi" OR "progresif kalip" OR "kesme kalibi" OR "bukme kalibi") freelance proje'
 ]
 
 def calistir():
-    llm = LLM(model="gemini/gemini-2.5-flash", api_key=GEMINI_API_KEY)
     db = IlanDB()
     profil = "Sac Metal Kalip Tasarimi (Progresif, Transfer, Kesme/Bukme), SolidWorks, Logopress, Mastercam CNC CAM, Aparat/Fikstur ve Tersine Muhendislik."
 
-    avci = Agent(
-        role="Agresif Kuresel Ilan Avcisi",
-        goal="Tum internetteki acik web, LinkedIn gonderileri, forumlar ve freelance platformlarindaki en guncel CAD/CAM, CNC ve sac kalip projelerini eksiksiz kazimak.",
-        backstory="Hicbir firsati kacirmayan, derin Google Dorking teknikleriyle dogrudan proje sahiplerinin ilanlarini ve linklerini bulan veri madencisi.",
-        tools=[google_ilan_ara],
-        llm=llm,
-        verbose=True
-    )
+    bulunanlar = []
+    print(f"[{datetime.now(TR_SAAT).strftime('%H:%M:%S')}] Dogrudan Google Search Grounding taramasi basladi...")
+
+    for s in SORGULAR:
+        ham_sonuc = dogrudan_google_ara(s)
+        filtrelenmis = db.filtrele(ham_sonuc)
+        if filtrelenmis:
+            bulunanlar.append(filtrelenmis)
+        time.sleep(12)  # 16 sorgu x 12 sn = ~3.5 dakikada tam tarama tamamlanir
+
+    if not bulunanlar:
+        web_sayfasi_guncelle([], "Tum sorgular tamamlandi. Yukaridaki Canli Tarama Gunlugunden girilen siteleri ve ham bulgulari inceleyebilirsiniz.")
+        return
+
+    llm = LLM(model="gemini/gemini-2.5-flash", api_key=GEMINI_API_KEY)
     filtre = Agent(role="Bas Kalip ve Uretim Muhendisi", goal="Profilime uyan gercek ve aktif ilanlari secmek.", backstory=f"Uzmanlik: {profil}", llm=llm, verbose=True)
     raporcu = Agent(role="Kidemli Teklif Stratejisti", goal="Secilen ilanlar icin yuksek donusumlu teknik teklif metinleri hazirlamak.", backstory="Is gelistirme uzmani.", llm=llm, verbose=True)
 
-    bas = time.time()
-    bulunanlar = []
-    while (time.time() - bas) < TARAMA_SURESI:
-        for s in SORGULAR:
-            if (time.time() - bas) >= TARAMA_SURESI:
-                break
-            t = Task(description=f"Tum internette agresif ara ve bulunan tum guncel is firsatlarinin basliklarini, ozetlerini ve TAM URL LINKLERINI listele: {s}", expected_output="Ilan listesi ve dogrudan URLler.", agent=avci)
-            try:
-                sonuc = db.filtrele(str(Crew(agents=[avci], tasks=[t]).kickoff()))
-                if sonuc:
-                    bulunanlar.append(sonuc)
-            except Exception as e:
-                print(e)
-            time.sleep(25)
-
-    if not bulunanlar:
-        web_sayfasi_guncelle([], "Son agresif taramada daha once gorulmemis yeni bir ilan tespit edilmedi. Yukaridaki gunlukten taranan siteleri inceleyebilirsiniz.")
-        return
-
-    t_analiz = Task(description=f"Sadece profilime ({profil}) uyan gercek yeni ilanlari sec ve 10 uzerinden puanla:\n\n" + "\n---\n".join(bulunanlar)[:35000], expected_output="Secilen ilanlar.", agent=filtre)
-    t_rapor = Task(description="Secilen ilanlari RaporSemasi formatinda doldur ve teklif metinlerini yaz (Ingilizce ilanlara Ingilizce, Turkce ilanlara Turkce).", expected_output="JSON rapor.", output_pydantic=RaporSemasi, agent=raporcu)
+    t_analiz = Task(
+        description=f"Asagidaki canli Google Search bulgularini incele. Sadece profilime ({profil}) uyan gercek is firsatlarini sec, tam URL'lerini koru ve 10 uzerinden puanla:\n\n" + "\n---\n".join(bulunanlar)[:35000],
+        expected_output="Secilen ilanlar ve URL listesi.",
+        agent=filtre
+    )
+    t_rapor = Task(
+        description="Secilen ilanlari RaporSemasi formatinda doldur ve teklif metinlerini yaz (Ingilizce ilanlara Ingilizce, Turkce ilanlara Turkce).",
+        expected_output="JSON rapor.",
+        output_pydantic=RaporSemasi,
+        agent=raporcu
+    )
     res = Crew(agents=[filtre, raporcu], tasks=[t_analiz, t_rapor]).kickoff()
 
     if res.pydantic and res.pydantic.ilanlar:
         web_sayfasi_guncelle(res.pydantic.ilanlar, res.pydantic.genel_ozet)
     else:
-        web_sayfasi_guncelle([], "Agresif tarama tamamlandi, yeni uygun firsat bulunamadi. Yukaridaki gunlukten detaylari inceleyebilirsiniz.")
+        web_sayfasi_guncelle([], "Tarama tamamlandi. Yukaridaki Canli Tarama Gunlugunden detaylari inceleyebilirsiniz.")
 
 if __name__ == "__main__":
     calistir()
