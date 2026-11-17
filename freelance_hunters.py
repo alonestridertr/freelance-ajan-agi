@@ -17,6 +17,9 @@ TR_SAAT = timezone(timedelta(hours=3))
 SU_AN = datetime.now(TR_SAAT)
 SEANS = "Sabah Seansi" if SU_AN.hour < 15 else "Aksam Seansi"
 
+# Her taramada gercekten ulasilan siteleri ve ozetleri tutan global gunluk
+TARAMA_GUNLUGU = []
+
 class IlanKarti(BaseModel):
     baslik: str
     platform: str
@@ -34,7 +37,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 @tool("Agresif Canli Web Is Ilani Kaziyici")
 def google_ilan_ara(sorgu: str) -> str:
-    """Google Search ile tum internetteki (Upwork, Cad Crowd, LinkedIn, GrabCAD, Guru, PeoplePerHour, Reddit, X, Bionluk ve acik web) en guncel CAD/CAM, CNC ve sac kalip projelerini bulur."""
+    """Google Search ile tum internetteki en guncel CAD/CAM, CNC ve sac kalip projelerini bulur ve gercek URL kaynaklarini dogrular."""
     prompt = (
         f"Agresif bir teknik proje avcisi gibi davran. Asagidaki arama sorgusuyla TUM INTERNETTEKI "
         f"(Upwork, Cad Crowd, LinkedIn ilanlari ve gonderileri, GrabCAD, Guru, PeoplePerHour, Freelancer, "
@@ -47,13 +50,34 @@ def google_ilan_ara(sorgu: str) -> str:
             contents=prompt,
             config=types.GenerateContentConfig(tools=[{"google_search": {}}], temperature=0.2)
         )
-        linkler = []
+        dogrulanmis_kaynaklar = []
         if resp.candidates and resp.candidates[0].grounding_metadata:
             for c in (resp.candidates[0].grounding_metadata.grounding_chunks or []):
                 if c.web and c.web.uri:
-                    linkler.append(f"- {c.web.title}: {c.web.uri}")
-        return f"{resp.text}\n\nKAYNAKLAR:\n" + "\n".join(linkler)
+                    dogrulanmis_kaynaklar.append({
+                        "baslik": c.web.title or "Web Sayfasi",
+                        "url": c.web.uri
+                    })
+
+        # Gunluge gercek ulasilan siteleri kaydet
+        TARAMA_GUNLUGU.append({
+            "saat": datetime.now(TR_SAAT).strftime("%H:%M:%S"),
+            "sorgu": sorgu,
+            "ulasilan_site_sayisi": len(dogrulanmis_kaynaklar),
+            "siteler": dogrulanmis_kaynaklar[:8],
+            "ham_ozet": (resp.text or "")[:450] + ("..." if len(resp.text or "") > 450 else "")
+        })
+
+        link_metni = "\n".join([f"- {k['baslik']}: {k['url']}" for k in dogrulanmis_kaynaklar])
+        return f"{resp.text}\n\nDOGRULANMIS GERCEK KAYNAKLAR:\n{link_metni}"
     except Exception as e:
+        TARAMA_GUNLUGU.append({
+            "saat": datetime.now(TR_SAAT).strftime("%H:%M:%S"),
+            "sorgu": sorgu,
+            "ulasilan_site_sayisi": 0,
+            "siteler": [],
+            "ham_ozet": f"Sorgu sirasinda hata: {e}"
+        })
         return f"Arama hatasi: {e}"
 
 class IlanDB:
@@ -97,20 +121,52 @@ def web_sayfasi_guncelle(yeni_ilanlar: List[IlanKarti], ozet: str):
     with open(veri_dosyasi, "w", encoding="utf-8") as f:
         json.dump(mevcut_liste, f, ensure_ascii=False, indent=2)
 
+    # Canli Tarama Gunlugu HTML'i olustur
+    toplam_sorgu = len(TARAMA_GUNLUGU)
+    toplam_ulasilan_site = sum(g["ulasilan_site_sayisi"] for g in TARAMA_GUNLUGU)
+    gunluk_satirlari = ""
+    for g in TARAMA_GUNLUGU:
+        site_linkleri = "".join([
+            f'<li><a href="{html.escape(s["url"])}" target="_blank" style="color:#38bdf8;text-decoration:none;">{html.escape(s["baslik"])}</a></li>'
+            for s in g["siteler"]
+        ])
+        if not site_linkleri:
+            site_linkleri = '<li style="color:#94a3b8;">Bu sorguda dogrudan sayfa eslesmesi donmedi.</li>'
+
+        gunluk_satirlari += f"""
+        <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:#94a3b8;margin-bottom:6px;">
+                <span>🕒 {html.escape(g['saat'])} | <b>Sorgu:</b> {html.escape(g['sorgu'])}</span>
+                <span style="color:#4ade80;font-weight:700;">✓ {g['ulasilan_site_sayisi']} Siteye Ulasildi</span>
+            </div>
+            <ul style="margin:6px 0;padding-left:18px;font-size:12px;line-height:1.5;">{site_linkleri}</ul>
+            <div style="font-size:12px;color:#cbd5e1;background:#1e293b;padding:8px;border-radius:6px;margin-top:6px;">
+                <b>Ajan Ham Ozeti:</b> {html.escape(g['ham_ozet'])}
+            </div>
+        </div>
+        """
+
+    if not gunluk_satirlari:
+        gunluk_satirlari = '<p style="color:#94a3b8;font-size:13px;">Henuz tarama kaydi olusmadi.</p>'
+
+    # Ilan Kartlari HTML'i
     kartlar_html = ""
+    platformlar = set()
     for idx, x in enumerate(mevcut_liste, 1):
         puan = x.get("uygunluk_puani", 7)
         rozet_renk = "#16a34a" if puan >= 8 else "#ca8a04"
         g_baslik = html.escape(x.get("baslik", ""))
-        g_plat = html.escape(x.get("platform", ""))
+        g_plat = html.escape(x.get("platform", "Diger"))
+        platformlar.add(g_plat)
         g_butce = html.escape(x.get("tahmini_butce_sure", ""))
         g_neden = html.escape(x.get("neden_uygun", ""))
         g_teklif = html.escape(x.get("teklif_metni", ""))
         g_url = html.escape(x.get("url", "#"))
         g_tarih = html.escape(x.get("eklenme_tarihi", ""))
+        kart_id = hashlib.md5(g_url.encode()).hexdigest()[:10]
 
         kartlar_html += f"""
-        <div class="card" data-platform="{g_plat.lower()}">
+        <div class="card" id="card-{kart_id}" data-platform="{g_plat.lower()}">
             <div class="card-top">
                 <div>
                     <span class="badge-plat">{g_plat}</span>
@@ -129,13 +185,18 @@ def web_sayfasi_guncelle(yeni_ilanlar: List[IlanKarti], ozet: str):
                 <pre>{g_teklif}</pre>
             </div>
             <div class="card-actions">
+                <button onclick="basvurulduIsaretle('{kart_id}')" class="btn-done" id="btn-{kart_id}">✓ Basvuruldu Isaretle</button>
                 <a href="{g_url}" target="_blank" class="btn-apply">Ilana Git & Basvur →</a>
             </div>
         </div>
         """
 
     if not kartlar_html:
-        kartlar_html = '<div class="empty">Henuz yeni ilan yakalanmadi. Bir sonraki otomatik taramada burasi dolacaktir.</div>'
+        kartlar_html = '<div class="empty">Henuz yeni ilan yakalanmadi. Yukaridaki Canli Tarama Gunlugunden ajanlarin hangi sitelere girdigini inceleyebilirsiniz.</div>'
+
+    filtre_butonlari = '<button onclick="filtrele(\'hepsi\', this)" class="filter-btn active">Tumu</button>'
+    for p in sorted(platformlar):
+        filtre_butonlari += f'<button onclick="filtrele(\'{p.lower()}\', this)" class="filter-btn">{p}</button>'
 
     sayfa_html = f"""<!DOCTYPE html>
 <html lang="tr">
@@ -145,11 +206,19 @@ def web_sayfasi_guncelle(yeni_ilanlar: List[IlanKarti], ozet: str):
 <title>Otonom Freelance Is Panosu</title>
 <style>
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }}
-  .container {{ max-width: 900px; margin: auto; }}
-  .header {{ background: linear-gradient(135deg, #1e293b, #334155); padding: 24px; border-radius: 16px; margin-bottom: 24px; border: 1px solid #475569; }}
-  .header h1 {{ margin: 0 0 8px 0; font-size: 24px; color: #38bdf8; }}
+  .container {{ max-width: 920px; margin: auto; }}
+  .header {{ background: linear-gradient(135deg, #1e293b, #334155); padding: 24px; border-radius: 16px; margin-bottom: 18px; border: 1px solid #475569; }}
+  .header h1 {{ margin: 0 0 8px 0; font-size: 23px; color: #38bdf8; }}
   .header p {{ margin: 0; color: #cbd5e1; font-size: 14px; }}
-  .card {{ background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 20px; margin-bottom: 18px; }}
+  .stats {{ display: flex; gap: 12px; margin-top: 14px; flex-wrap: wrap; }}
+  .stat-box {{ background: #0f172a; border: 1px solid #334155; padding: 8px 14px; border-radius: 8px; font-size: 13px; color: #e2e8f0; }}
+  details.audit-log {{ background: #1e293b; border: 1px solid #38bdf8; border-radius: 12px; padding: 14px 18px; margin-bottom: 20px; }}
+  details.audit-log summary {{ cursor: pointer; font-weight: 700; color: #38bdf8; font-size: 15px; }}
+  .filters {{ display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }}
+  .filter-btn {{ background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 6px 14px; border-radius: 20px; cursor: pointer; font-size: 13px; }}
+  .filter-btn.active, .filter-btn:hover {{ background: #2563eb; color: #fff; border-color: #2563eb; }}
+  .card {{ background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 20px; margin-bottom: 18px; transition: opacity 0.2s; }}
+  .card.applied {{ opacity: 0.45; border-color: #16a34a; }}
   .card-top {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
   .badge-plat {{ background: #0284c7; color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; }}
   .badge-score {{ color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; margin-left: 6px; }}
@@ -161,20 +230,33 @@ def web_sayfasi_guncelle(yeni_ilanlar: List[IlanKarti], ozet: str):
   .prop-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; color: #94a3b8; }}
   pre {{ margin: 0; white-space: pre-wrap; font-family: monospace; font-size: 13px; color: #e2e8f0; }}
   .btn-copy {{ background: #334155; color: #fff; border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }}
-  .btn-copy:hover {{ background: #475569; }}
-  .card-actions {{ text-align: right; }}
-  .btn-apply {{ background: #2563eb; color: #fff; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 14px; display: inline-block; }}
-  .btn-apply:hover {{ background: #1d4ed8; }}
+  .card-actions {{ display: flex; justify-content: space-between; align-items: center; }}
+  .btn-done {{ background: #334155; color: #e2e8f0; border: none; padding: 9px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }}
+  .btn-apply {{ background: #2563eb; color: #fff; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 14px; }}
   .empty {{ text-align: center; padding: 40px; background: #1e293b; border-radius: 12px; color: #94a3b8; }}
 </style>
 </head>
 <body>
 <div class="container">
   <div class="header">
-    <h1>Otonom CAD/CAM & Kalip Muhendisligi Is Panosu (Agresif Mod)</h1>
-    <p>Son Guncelleme: {tarih_etiket} ({SEANS}) | Toplam Arsivlenen Firsat: {len(mevcut_liste)}</p>
-    <p style="margin-top:8px; color:#93c5fd;">{html.escape(ozet)}</p>
+    <h1>Otonom CAD/CAM & Kalip Muhendisligi Is Panosu</h1>
+    <p>Son Guncelleme: {tarih_etiket} ({SEANS})</p>
+    <div class="stats">
+      <div class="stat-box">🔍 Yapilan Sorgu: <b>{toplam_sorgu}</b></div>
+      <div class="stat-box">🌐 Girilen/Dogrulanan Sayfa: <b>{toplam_ulasilan_site}</b></div>
+      <div class="stat-box">🎯 Arsivlenen Firsat: <b>{len(mevcut_liste)}</b></div>
+    </div>
+    <p style="margin-top:12px; color:#93c5fd;">{html.escape(ozet)}</p>
   </div>
+
+  <details class="audit-log" open>
+    <summary>📡 Canli Tarama Gunlugu: Ajanlar Hangi Sitelere Girdi & Ne Buldu? ({toplam_sorgu} Sorgu / {toplam_ulasilan_site} Dogrulanmis Link)</summary>
+    <div style="margin-top:12px; max-height:420px; overflow-y:auto;">
+      {gunluk_satirlari}
+    </div>
+  </details>
+
+  <div class="filters">{filtre_butonlari}</div>
   {kartlar_html}
 </div>
 <script>
@@ -184,6 +266,30 @@ function kopyala(btn) {{
   btn.innerText = "Kopyalandi!";
   setTimeout(() => btn.innerText = "Kopyala", 2000);
 }}
+function filtrele(plat, btn) {{
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.card').forEach(c => {{
+    c.style.display = (plat === 'hepsi' || c.dataset.platform.includes(plat)) ? 'block' : 'none';
+  }});
+}}
+function basvurulduIsaretle(id) {{
+  const card = document.getElementById('card-' + id);
+  const btn = document.getElementById('btn-' + id);
+  const durum = card.classList.toggle('applied');
+  localStorage.setItem('applied_' + id, durum ? '1' : '0');
+  btn.innerText = durum ? '✓ Basvuruldu (Geri Al)' : '✓ Basvuruldu Isaretle';
+}}
+window.onload = () => {{
+  document.querySelectorAll('.card').forEach(c => {{
+    const id = c.id.replace('card-', '');
+    if (localStorage.getItem('applied_' + id) === '1') {{
+      c.classList.add('applied');
+      const btn = document.getElementById('btn-' + id);
+      if (btn) btn.innerText = '✓ Basvuruldu (Geri Al)';
+    }}
+  }});
+}};
 </script>
 </body>
 </html>"""
@@ -246,7 +352,7 @@ def calistir():
             time.sleep(25)
 
     if not bulunanlar:
-        web_sayfasi_guncelle([], "Son agresif taramada kriterlerinize uyan yeni bir ilan tespit edilmedi.")
+        web_sayfasi_guncelle([], "Son agresif taramada daha once gorulmemis yeni bir ilan tespit edilmedi. Yukaridaki gunlukten taranan siteleri inceleyebilirsiniz.")
         return
 
     t_analiz = Task(description=f"Sadece profilime ({profil}) uyan gercek yeni ilanlari sec ve 10 uzerinden puanla:\n\n" + "\n---\n".join(bulunanlar)[:35000], expected_output="Secilen ilanlar.", agent=filtre)
@@ -256,7 +362,7 @@ def calistir():
     if res.pydantic and res.pydantic.ilanlar:
         web_sayfasi_guncelle(res.pydantic.ilanlar, res.pydantic.genel_ozet)
     else:
-        web_sayfasi_guncelle([], "Agresif tarama tamamlandi, yeni uygun firsat bulunamadi.")
+        web_sayfasi_guncelle([], "Agresif tarama tamamlandi, yeni uygun firsat bulunamadi. Yukaridaki gunlukten detaylari inceleyebilirsiniz.")
 
 if __name__ == "__main__":
     calistir()
