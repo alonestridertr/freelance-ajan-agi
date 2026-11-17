@@ -32,15 +32,20 @@ class RaporSemasi(BaseModel):
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-@tool("Canli Google Is Ilani Arama")
+@tool("Agresif Canli Web Is Ilani Kaziyici")
 def google_ilan_ara(sorgu: str) -> str:
-    """Google Search ile guncel freelance is ilanlarini ve URL linklerini bulur."""
-    prompt = f"Su sorguyla Upwork, LinkedIn, Freelancer, Bionluk vb. sitelerdeki en guncel freelance ilanlarini baslik, butce ve tam URL linkiyle listele: {sorgu}"
+    """Google Search ile tum internetteki (Upwork, Cad Crowd, LinkedIn, GrabCAD, Guru, PeoplePerHour, Reddit, X, Bionluk ve acik web) en guncel CAD/CAM, CNC ve sac kalip projelerini bulur."""
+    prompt = (
+        f"Agresif bir teknik proje avcisi gibi davran. Asagidaki arama sorgusuyla TUM INTERNETTEKI "
+        f"(Upwork, Cad Crowd, LinkedIn ilanlari ve gonderileri, GrabCAD, Guru, PeoplePerHour, Freelancer, "
+        f"Fiverr, Reddit, X, Bionluk, sirket web siteleri vb.) EN GUNCEL freelance, sozlesmeli veya proje bazli "
+        f"is firsatlarini bul. Her birinin tam basligini, platformunu, butce/sure bilgisini ve DOGRUDAN URL LINKINI listele:\n{sorgu}"
+    )
     try:
         resp = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(tools=[{"google_search": {}}], temperature=0.1)
+            config=types.GenerateContentConfig(tools=[{"google_search": {}}], temperature=0.2)
         )
         linkler = []
         if resp.candidates and resp.candidates[0].grounding_metadata:
@@ -88,8 +93,7 @@ def web_sayfasi_guncelle(yeni_ilanlar: List[IlanKarti], ozet: str):
         kayit["eklenme_tarihi"] = f"{tarih_etiket} ({SEANS})"
         mevcut_liste.insert(0, kayit)
 
-    # Son 100 ilani panelde tut
-    mevcut_liste = mevcut_liste[:100]
+    mevcut_liste = mevcut_liste[:150]
     with open(veri_dosyasi, "w", encoding="utf-8") as f:
         json.dump(mevcut_liste, f, ensure_ascii=False, indent=2)
 
@@ -167,7 +171,7 @@ def web_sayfasi_guncelle(yeni_ilanlar: List[IlanKarti], ozet: str):
 <body>
 <div class="container">
   <div class="header">
-    <h1>Otonom CAD/CAM & Kalip Muhendisligi Is Panosu</h1>
+    <h1>Otonom CAD/CAM & Kalip Muhendisligi Is Panosu (Agresif Mod)</h1>
     <p>Son Guncelleme: {tarih_etiket} ({SEANS}) | Toplam Arsivlenen Firsat: {len(mevcut_liste)}</p>
     <p style="margin-top:8px; color:#93c5fd;">{html.escape(ozet)}</p>
   </div>
@@ -188,24 +192,43 @@ function kopyala(btn) {{
         f.write(sayfa_html)
 
 SORGULAR = [
-    'site:upwork.com/freelance-jobs ("SolidWorks" OR "Sheet Metal" OR "Die Design")',
-    'site:linkedin.com/jobs ("SolidWorks" OR "Sheet Metal" OR "Tool and Die") freelance',
-    'site:linkedin.com/posts ("looking for" OR "hiring") ("SolidWorks" OR "sheet metal" OR "Mastercam")',
-    'site:freelancer.com/projects ("CNC" OR "Mastercam" OR "SolidWorks" OR "Sheet Metal")',
-    '"freelance" ("sheet metal die design" OR "progressive die" OR "stamping die")',
-    '"freelance" ("Mastercam" OR "5 axis CAM" OR "CNC programming")',
-    'site:bionluk.com ("SolidWorks" OR "3D cizim" OR "kalip tasarim" OR "CNC")',
-    '("tersine muhendislik" OR "sac kalip tasarimi" OR "progresif kalip") freelance'
+    'site:upwork.com/freelance-jobs ("SolidWorks" OR "Sheet Metal" OR "Die Design" OR "Progressive Die")',
+    'site:upwork.com/freelance-jobs ("Mastercam" OR "CNC Programming" OR "Reverse Engineering" OR "Tooling")',
+    'site:cadcrowd.com ("SolidWorks" OR "Sheet Metal" OR "Die Design" OR "Reverse Engineering" OR "CNC")',
+    'site:linkedin.com/jobs ("SolidWorks" OR "Sheet Metal" OR "Tool and Die" OR "Mastercam") ("contract" OR "freelance" OR "remote")',
+    'site:linkedin.com/posts ("looking for" OR "hiring" OR "need") ("SolidWorks" OR "sheet metal" OR "progressive die" OR "Mastercam")',
+    'site:freelancer.com/projects ("CNC" OR "Mastercam" OR "SolidWorks" OR "Sheet Metal" OR "Stamping")',
+    'site:guru.com/d/jobs ("SolidWorks" OR "Sheet Metal" OR "CAD" OR "CNC" OR "Tooling")',
+    'site:peopleperhour.com/freelance-jobs ("SolidWorks" OR "CAD" OR "Sheet Metal" OR "3D Modeling")',
+    'site:grabcad.com ("challenge" OR "job" OR "freelance" OR "sheet metal" OR "tooling")',
+    'site:reddit.com ("forhire" OR "hiring" OR "looking for") ("SolidWorks" OR "sheet metal" OR "CNC" OR "CAD designer")',
+    '"freelance" ("sheet metal die design" OR "progressive die" OR "stamping die" OR "transfer die")',
+    '"freelance" ("Logopress" OR "3D QuickPress" OR "sheet metal tooling" OR "forming die")',
+    '"freelance" ("Mastercam" OR "5 axis CAM" OR "CNC programming" OR "G-code")',
+    '"freelance" ("reverse engineering" OR "scan to CAD" OR "STEP file" OR "STL to SolidWorks")',
+    '"looking for a freelance" ("SolidWorks" OR "mechanical engineer" OR "toolmaker" OR "CAD")',
+    '"contract" ("sheet metal design" OR "fixture design" OR "jig and fixture") remote',
+    'site:bionluk.com ("SolidWorks" OR "3D cizim" OR "kalip tasarim" OR "CNC" OR "sac metal")',
+    '("sac kalip tasarimi" OR "progresif kalip" OR "kesme kalibi" OR "bukme kalibi") freelance proje',
+    '("SolidWorks" OR "Mastercam" OR "tersine muhendislik") ("freelance" OR "proje bazli" OR "disaridan")',
+    '("fason kalip tasarimi" OR "makine tasarimi freelance" OR "3D kati modelleme is ilani")'
 ]
 
 def calistir():
     llm = LLM(model="gemini/gemini-2.5-flash", api_key=GEMINI_API_KEY)
     db = IlanDB()
-    profil = "Sac Metal Kalip Tasarimi (Progresif, Transfer), SolidWorks, Logopress, Mastercam CNC CAM, Tersine Muhendislik."
+    profil = "Sac Metal Kalip Tasarimi (Progresif, Transfer, Kesme/Bukme), SolidWorks, Logopress, Mastercam CNC CAM, Aparat/Fikstur ve Tersine Muhendislik."
 
-    avci = Agent(role="Ilan Avcisi", goal="Guncel CAD/CAM ve kalip ilanlarini bulmak.", backstory="Veri madencisi.", tools=[google_ilan_ara], llm=llm, verbose=True)
-    filtre = Agent(role="Kalip Muhendisi", goal="Profilime uyan yeni ilanlari secmek.", backstory=f"Uzmanlik: {profil}", llm=llm, verbose=True)
-    raporcu = Agent(role="Teklif Yazari", goal="Secilen ilanlar icin rapor ve teklif hazirlamak.", backstory="Is gelistirme uzmani.", llm=llm, verbose=True)
+    avci = Agent(
+        role="Agresif Kuresel Ilan Avcisi",
+        goal="Tum internetteki acik web, LinkedIn gonderileri, forumlar ve freelance platformlarindaki en guncel CAD/CAM, CNC ve sac kalip projelerini eksiksiz kazimak.",
+        backstory="Hicbir firsati kacirmayan, derin Google Dorking teknikleriyle dogrudan proje sahiplerinin ilanlarini ve linklerini bulan veri madencisi.",
+        tools=[google_ilan_ara],
+        llm=llm,
+        verbose=True
+    )
+    filtre = Agent(role="Bas Kalip ve Uretim Muhendisi", goal="Profilime uyan gercek ve aktif ilanlari secmek.", backstory=f"Uzmanlik: {profil}", llm=llm, verbose=True)
+    raporcu = Agent(role="Kidemli Teklif Stratejisti", goal="Secilen ilanlar icin yuksek donusumlu teknik teklif metinleri hazirlamak.", backstory="Is gelistirme uzmani.", llm=llm, verbose=True)
 
     bas = time.time()
     bulunanlar = []
@@ -213,27 +236,27 @@ def calistir():
         for s in SORGULAR:
             if (time.time() - bas) >= TARAMA_SURESI:
                 break
-            t = Task(description=f"Google ile ara ve ilan basliklariyla tam URL linklerini listele: {s}", expected_output="Ilan listesi ve URLler.", agent=avci)
+            t = Task(description=f"Tum internette agresif ara ve bulunan tum guncel is firsatlarinin basliklarini, ozetlerini ve TAM URL LINKLERINI listele: {s}", expected_output="Ilan listesi ve dogrudan URLler.", agent=avci)
             try:
                 sonuc = db.filtrele(str(Crew(agents=[avci], tasks=[t]).kickoff()))
                 if sonuc:
                     bulunanlar.append(sonuc)
             except Exception as e:
                 print(e)
-            time.sleep(75)
+            time.sleep(25)
 
     if not bulunanlar:
-        web_sayfasi_guncelle([], "Son taramada kriterlerinize uyan yeni bir ilan tespit edilmedi.")
+        web_sayfasi_guncelle([], "Son agresif taramada kriterlerinize uyan yeni bir ilan tespit edilmedi.")
         return
 
-    t_analiz = Task(description=f"Sadece profilime ({profil}) uyan yeni ilanlari sec ve puanla:\n\n" + "\n---\n".join(bulunanlar)[:25000], expected_output="Secilen ilanlar.", agent=filtre)
-    t_rapor = Task(description="Secilen ilanlari RaporSemasi formatinda doldur ve teklif metinlerini yaz.", expected_output="JSON rapor.", output_pydantic=RaporSemasi, agent=raporcu)
+    t_analiz = Task(description=f"Sadece profilime ({profil}) uyan gercek yeni ilanlari sec ve 10 uzerinden puanla:\n\n" + "\n---\n".join(bulunanlar)[:35000], expected_output="Secilen ilanlar.", agent=filtre)
+    t_rapor = Task(description="Secilen ilanlari RaporSemasi formatinda doldur ve teklif metinlerini yaz (Ingilizce ilanlara Ingilizce, Turkce ilanlara Turkce).", expected_output="JSON rapor.", output_pydantic=RaporSemasi, agent=raporcu)
     res = Crew(agents=[filtre, raporcu], tasks=[t_analiz, t_rapor]).kickoff()
 
     if res.pydantic and res.pydantic.ilanlar:
         web_sayfasi_guncelle(res.pydantic.ilanlar, res.pydantic.genel_ozet)
     else:
-        web_sayfasi_guncelle([], "Tarama tamamlandi, yeni uygun firsat bulunamadi.")
+        web_sayfasi_guncelle([], "Agresif tarama tamamlandi, yeni uygun firsat bulunamadi.")
 
 if __name__ == "__main__":
     calistir()
